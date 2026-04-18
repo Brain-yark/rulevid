@@ -12,9 +12,11 @@ type Page = 'login' | 'dashboard' | 'room' | 'wallet';
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('login');
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [user, setUser] = useState<{ email: string } | null>(null);
 
   useEffect(() => {
+    // ... validateToken logic is unchanged
     const validateToken = async () => {
       const token = localStorage.getItem('auth_token');
       if (!token) return;
@@ -29,10 +31,9 @@ const App: React.FC = () => {
         if (response.ok) {
           const data = await response.json();
           setUser(data.user);
-          localStorage.setItem('user', JSON.stringify(data.user)); // refresh local cache
+          localStorage.setItem('user', JSON.stringify(data.user)); 
           setCurrentPage('dashboard');
         } else {
-          // Token invalid or expired
           handleLogout();
         }
       } catch (err) {
@@ -57,6 +58,7 @@ const App: React.FC = () => {
     setUser(null);
     localStorage.removeItem('user');
     localStorage.removeItem('auth_token');
+    setActiveSessionId(null);
     setCurrentPage('login');
   };
 
@@ -65,9 +67,14 @@ const App: React.FC = () => {
       case 'login':
         return <LoginPage onLogin={handleLogin} />;
       case 'dashboard':
-        return <Dashboard onJoinRoom={() => setCurrentPage('room')} onGoToWallet={() => setCurrentPage('wallet')} />;
+        return <Dashboard 
+                 onJoinRoom={(id) => { setActiveSessionId(id); setCurrentPage('room'); }} 
+                 onGoToWallet={() => setCurrentPage('wallet')} 
+               />;
       case 'room':
-        return <Room onExit={() => setCurrentPage('dashboard')} />;
+        return activeSessionId ? 
+          <Room sessionId={activeSessionId} onExit={() => { setActiveSessionId(null); setCurrentPage('dashboard'); }} /> 
+          : <Dashboard onJoinRoom={(id) => { setActiveSessionId(id); setCurrentPage('room'); }} onGoToWallet={() => setCurrentPage('wallet')} />;
       case 'wallet':
         return <Wallet onBack={() => setCurrentPage('dashboard')} />;
       default:

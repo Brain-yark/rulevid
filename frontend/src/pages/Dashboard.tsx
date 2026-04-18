@@ -1,17 +1,72 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, Play, Calendar, Users, Clock, Search, Filter, Video } from 'lucide-react';
 
+interface Session {
+  id: string;
+  title: string;
+  channelName: string;
+  status: string;
+  participantCount: number;
+  createdAt: string;
+}
+
 interface DashboardProps {
-  onJoinRoom: () => void;
+  onJoinRoom: (sessionId: string) => void;
   onGoToWallet: () => void;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
-  const [sessions] = useState([
-    { id: '1', title: 'Product Launch Event', type: 'Live Stream', status: 'Live Now', participantsCount: 156, date: 'Today' },
-    { id: '2', title: 'Weekly Team Sync', type: 'Video Call', status: 'Upcoming', participantsCount: 12, date: '2:00 PM' },
-    { id: '3', title: 'Community AMA', type: 'Live Stream', status: 'Scheduled', participantsCount: 0, date: 'Tomorrow' },
-  ]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    fetchSessions();
+  }, []);
+
+  const fetchSessions = async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/sessions', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        setSessions(await response.json());
+      }
+    } catch (e) {
+      console.error('Failed to load sessions', e);
+    }
+  };
+
+  const handleCreateSession = async () => {
+    const title = prompt('Enter a title for the new session:');
+    if (!title) return;
+
+    const token = localStorage.getItem('auth_token');
+    setIsCreating(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/sessions', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ title })
+      });
+      
+      if (response.ok) {
+        await fetchSessions();
+      } else {
+        alert('Failed to create session');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error creating session');
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   return (
     <div className="dashboard">
@@ -20,9 +75,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <h1>Welcome back, Facilitator</h1>
           <p className="subtitle">Manage your streaming sessions and participants</p>
         </div>
-        <button className="create-session-btn" onClick={() => alert('Feature coming soon: Session Creation')}>
+        <button className="create-session-btn" onClick={handleCreateSession} disabled={isCreating}>
           <Plus size={20} />
-          Create Session
+          {isCreating ? 'Creating...' : 'Create Session'}
         </button>
       </header>
 
@@ -31,14 +86,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <div className="stat-icon"><Video size={24} /></div>
           <div className="stat-info">
             <span className="stat-label">Total Sessions</span>
-            <span className="stat-value">24</span>
+            <span className="stat-value">{sessions.length}</span>
           </div>
         </div>
         <div className="stat-card glass-card">
           <div className="stat-icon"><Users size={24} /></div>
           <div className="stat-info">
             <span className="stat-label">Total Participants</span>
-            <span className="stat-value">1.4k</span>
+            <span className="stat-value">{sessions.reduce((acc, s) => acc + s.participantCount, 0)}</span>
           </div>
         </div>
         <div className="stat-card glass-card clickable" onClick={onGoToWallet}>
@@ -64,13 +119,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
         </div>
 
         <div className="sessions-grid">
+          {sessions.length === 0 && <p className="text-muted">No sessions yet. Create one to get started.</p>}
           {sessions.map(session => (
             <div key={session.id} className="session-card glass-card">
               <div className="session-status">
                 <span className={`status-badge ${session.status.toLowerCase().replace(' ', '-')}`}>
                   {session.status}
                 </span>
-                <span className="session-type">{session.type}</span>
+                <span className="session-type">Live Stream</span>
               </div>
               
               <h3 className="session-title">{session.title}</h3>
@@ -78,24 +134,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
               <div className="session-meta">
                 <div className="meta-item">
                   <Calendar size={14} />
-                  <span>{session.date}</span>
+                  <span>{new Date(session.createdAt).toLocaleDateString()}</span>
                 </div>
                 <div className="meta-item">
                   <Users size={14} />
-                  <span>{session.participantsCount} participants</span>
+                  <span>{session.participantCount} participants</span>
                 </div>
               </div>
 
               <div className="session-actions">
-                {session.status === 'Live Now' ? (
-                  <button className="join-btn active" onClick={onJoinRoom}>
-                    <Play size={16} /> Join Live
-                  </button>
-                ) : (
-                  <button className="join-btn">
-                    Configure
-                  </button>
-                )}
+                <button className="join-btn active" onClick={() => onJoinRoom(session.id)}>
+                  <Play size={16} /> Join Room
+                </button>
               </div>
             </div>
           ))}

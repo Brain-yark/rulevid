@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, MessageSquare, Users, Settings, Share2, Hand } from 'lucide-react';
 import { 
   LocalVideoTrack, 
@@ -10,19 +10,62 @@ import {
   useRemoteUsers 
 } from "agora-rtc-react";
 
+// SVSM App ID - normally handled via env but currently passed raw per user direction
 const APP_ID = "81aeffb4262b45a8ad4c91286f55da3a";
-const CHANNEL = "svsm";
-const TOKEN = "007eJxTYKh7t/S4ooO25rzw0BVrniRl+Pom639ffdTzxO/KhQazVscpMFgYJqampSWZGJkZJZmYJlokppgkWxoaWZilmZqmJBonznZ/nNkQyMhwrbOClZEBAkF8FobisuJcBgYAqBEhQw==";
 
 interface RoomProps {
+  sessionId: string;
   onExit: () => void;
 }
 
-const Room: React.FC<RoomProps> = ({ onExit }) => {
+interface AgoraConfig {
+  channel: string;
+  token: string;
+  uid: number;
+}
+
+const Room: React.FC<RoomProps> = ({ sessionId, onExit }) => {
+  const [config, setConfig] = useState<AgoraConfig | null>(null);
+
+  useEffect(() => {
+    const fetchToken = async () => {
+      const authToken = localStorage.getItem('auth_token');
+      try {
+        const res = await fetch(`http://localhost:3001/api/v1/sessions/${sessionId}/join`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (data.agoraToken && data.session) {
+          setConfig({
+            channel: data.session.channelName,
+            token: data.agoraToken,
+            uid: data.uid
+          });
+        } else {
+          alert('Failed to connect to room');
+          onExit();
+        }
+      } catch (e) {
+        console.error(e);
+        onExit();
+      }
+    };
+    fetchToken();
+  }, [sessionId, onExit]);
+
+  if (!config) {
+    return <div className="room-container loading">Initializing securely...</div>;
+  }
+
+  return <ActiveRoom config={config} onExit={onExit} />;
+};
+
+const ActiveRoom: React.FC<{config: AgoraConfig, onExit: () => void}> = ({ config, onExit }) => {
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [showParticipants, setShowParticipants] = useState(false);
   const [messages, setMessages] = useState([
-    { id: 1, user: 'System', text: 'Welcome to the Product Launch Event!' },
+    { id: 1, user: 'System', text: 'Welcome to securely tokenized session!' },
   ]);
   const [inputMessage, setInputMessage] = useState('');
 
@@ -32,8 +75,9 @@ const Room: React.FC<RoomProps> = ({ onExit }) => {
   
   useJoin({
     appid: APP_ID,
-    channel: CHANNEL,
-    token: TOKEN,
+    channel: config.channel,
+    token: config.token,
+    uid: config.uid
   });
 
   usePublish([localMicrophoneTrack, localCameraTrack]);
