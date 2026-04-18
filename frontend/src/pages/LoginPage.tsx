@@ -6,13 +6,46 @@ interface LoginPageProps {
 }
 
 const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
+  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email && password) {
-      onLogin(email);
+    if (!email || !password) return;
+    if (!isLogin && !companyName) return;
+
+    setError('');
+    setIsLoading(true);
+
+    const endpoint = isLogin ? '/api/v1/auth/login' : '/api/v1/auth/register';
+    const payload = isLogin ? { email, password } : { email, password, companyName };
+
+    try {
+      const response = await fetch(`http://localhost:3001${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Authentication failed');
+      }
+
+      // Store token and user data
+      localStorage.setItem('auth_token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      
+      onLogin(data.user.email);
+    } catch (err: any) {
+      setError(err.message || 'Network error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -42,10 +75,28 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       </div>
 
       <div className="login-box glass-card animate-fade-in">
-        <h2>Facilitator Login</h2>
-        <p className="login-desc">Enter your credentials to manage your sessions</p>
+        <h2>{isLogin ? 'Facilitator Login' : 'Create Account'}</h2>
+        <p className="login-desc">
+          {isLogin 
+            ? 'Enter your credentials to manage your sessions'
+            : 'Join SVSM to start streaming and managing participants'}
+        </p>
+
+        {error && <div className="error-message">{error}</div>}
 
         <form onSubmit={handleSubmit}>
+          {!isLogin && (
+            <div className="form-group">
+              <label>Company Name</label>
+              <input 
+                type="text" 
+                placeholder="Acme Corp"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                required={!isLogin}
+              />
+            </div>
+          )}
           <div className="form-group">
             <label>Email Address</label>
             <input 
@@ -66,15 +117,19 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               required
             />
           </div>
-          <button type="submit" className="login-submit">
-            Access Dashboard
+          <button type="submit" className="login-submit" disabled={isLoading}>
+            {isLoading ? 'Processing...' : (isLogin ? 'Access Dashboard' : 'Register Account')}
           </button>
         </form>
         
         <div className="login-footer">
-          <a href="#">Forgot password?</a>
-          <span className="divider">|</span>
-          <a href="#">Support</a>
+          <a href="#" onClick={(e) => {
+            e.preventDefault();
+            setIsLogin(!isLogin);
+            setError('');
+          }}>
+            {isLogin ? 'Need an account? Register' : 'Already have an account? Login'}
+          </a>
         </div>
       </div>
 
@@ -146,6 +201,16 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           font-size: 0.95rem;
         }
 
+        .error-message {
+          color: #ef4444;
+          background: rgba(239, 68, 68, 0.1);
+          padding: 0.75rem;
+          border-radius: 8px;
+          margin-bottom: 1.5rem;
+          font-size: 0.9rem;
+          border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
         .form-group {
           margin-bottom: 1.5rem;
         }
@@ -189,9 +254,14 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           margin-top: 1rem;
         }
 
-        .login-submit:hover {
+        .login-submit:hover:not(:disabled) {
           background: var(--primary-hover);
           transform: translateY(-1px);
+        }
+
+        .login-submit:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
         }
 
         .login-footer {

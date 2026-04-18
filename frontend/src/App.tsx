@@ -15,23 +15,48 @@ const App: React.FC = () => {
   const [user, setUser] = useState<{ email: string } | null>(null);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-      setCurrentPage('dashboard');
-    }
+    const validateToken = async () => {
+      const token = localStorage.getItem('auth_token');
+      if (!token) return;
+
+      try {
+        const response = await fetch('http://localhost:3001/api/v1/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setUser(data.user);
+          localStorage.setItem('user', JSON.stringify(data.user)); // refresh local cache
+          setCurrentPage('dashboard');
+        } else {
+          // Token invalid or expired
+          handleLogout();
+        }
+      } catch (err) {
+        console.error('Failed to validate token:', err);
+      }
+    };
+
+    validateToken();
   }, []);
 
   const handleLogin = (email: string) => {
-    const userData = { email };
-    setUser(userData);
-    localStorage.setItem('user', JSON.stringify(userData));
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
+    } else {
+      setUser({ email });
+    }
     setCurrentPage('dashboard');
   };
 
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('user');
+    localStorage.removeItem('auth_token');
     setCurrentPage('login');
   };
 
