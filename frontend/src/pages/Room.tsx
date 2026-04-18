@@ -104,66 +104,80 @@ const ActiveRoom: React.FC<{config: AgoraConfig, onExit: () => void}> = ({ confi
     }
   };
 
-  return (
-    <div className="room-container animate-fade-in">
-      <div className="main-room-layout">
-        <div className="video-area">
-          <div className="video-grid">
-            {/* Main Speaker / Stream - Local Video */}
-            <div className="video-tile main-host glass">
-              {localCameraTrack ? (
-                <LocalVideoTrack 
-                  track={localCameraTrack} 
-                  play={true} 
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                />
-              ) : (
-                <div className="video-placeholder">
-                  <div className="host-avatar">HD</div>
-                  <span>Camera is off</span>
-                </div>
-              )}
-              <div className="live-indicator">LIVE</div>
-              <div className="room-info">Channel: {CHANNEL}</div>
-            </div>
+    const handleExit = async () => {
+      const authToken = localStorage.getItem('auth_token');
+      try {
+        // Attempt to end the session on backend (only works if facilitator)
+        await fetch(`http://localhost:3001/api/v1/sessions/${config.channel.split('_')[2]}/end`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+      } catch (e) {
+        console.error('Failed to end session on backend:', e);
+      }
+      onExit();
+    };
 
-            {/* Audience / Co-hosts - Remote Videos */}
-            <div className="audience-grid">
-              {remoteUsers.length > 0 ? remoteUsers.map(user => (
-                <div key={user.uid} className="video-tile audience-tile glass">
-                  <RemoteVideoTrack 
-                    user={user} 
-                    playVideo={true} 
-                    playAudio={true}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+    return (
+      <div className="room-container animate-fade-in">
+        <div className="main-room-layout">
+          <div className="video-area">
+            <div className="video-grid">
+              {/* Main Speaker / Stream - Local Video */}
+              <div className="video-tile main-host glass">
+                {localCameraTrack ? (
+                  <LocalVideoTrack 
+                    track={localCameraTrack} 
+                    play={true} 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
                   />
-                  <div className="video-label">User {user.uid}</div>
-                </div>
-              )) : (
-                <div className="waiting-pill">Waiting for participants...</div>
-              )}
+                ) : (
+                  <div className="video-placeholder">
+                    <div className="host-avatar">HD</div>
+                    <span>Camera is off</span>
+                  </div>
+                )}
+                <div className="live-indicator">LIVE</div>
+                <div className="room-info">Channel: {config.channel}</div>
+              </div>
+  
+              {/* Audience / Co-hosts - Remote Videos */}
+              <div className="audience-grid">
+                {remoteUsers.length > 0 ? remoteUsers.map(user => (
+                  <div key={user.uid} className="video-tile audience-tile glass">
+                    <RemoteVideoTrack 
+                      user={user} 
+                      playVideo={true} 
+                      playAudio={true}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                    <div className="video-label">User {user.uid}</div>
+                  </div>
+                )) : (
+                  <div className="waiting-pill">Waiting for participants...</div>
+                )}
+              </div>
+            </div>
+  
+            <div className="room-controls glass">
+              <button 
+                className={`control-btn ${!localMicrophoneTrack?.enabled ? 'off' : ''}`} 
+                onClick={toggleMic}
+              >
+                {!localMicrophoneTrack?.enabled ? <MicOff /> : <Mic />}
+              </button>
+              <button 
+                className={`control-btn ${!localCameraTrack?.enabled ? 'off' : ''}`} 
+                onClick={toggleVideo}
+              >
+                {!localCameraTrack?.enabled ? <VideoOff /> : <VideoIcon />}
+              </button>
+              <button className="control-btn" onClick={() => alert('Hand raised')}><Hand /></button>
+              <button className="control-btn" onClick={() => alert('Screen share coming soon')}><Share2 /></button>
+              <button className="control-btn" onClick={() => alert('Settings coming soon')}><Settings /></button>
+              <button className="control-btn end-call" onClick={handleExit}><PhoneOff /></button>
             </div>
           </div>
-
-          <div className="room-controls glass">
-            <button 
-              className={`control-btn ${!localMicrophoneTrack?.enabled ? 'off' : ''}`} 
-              onClick={toggleMic}
-            >
-              {!localMicrophoneTrack?.enabled ? <MicOff /> : <Mic />}
-            </button>
-            <button 
-              className={`control-btn ${!localCameraTrack?.enabled ? 'off' : ''}`} 
-              onClick={toggleVideo}
-            >
-              {!localCameraTrack?.enabled ? <VideoOff /> : <VideoIcon />}
-            </button>
-            <button className="control-btn" onClick={() => alert('Hand raised')}><Hand /></button>
-            <button className="control-btn" onClick={() => alert('Screen share coming soon')}><Share2 /></button>
-            <button className="control-btn" onClick={() => alert('Settings coming soon')}><Settings /></button>
-            <button className="control-btn end-call" onClick={onExit}><PhoneOff /></button>
-          </div>
-        </div>
 
         {isChatOpen && (
           <aside className="side-panel glass-card">

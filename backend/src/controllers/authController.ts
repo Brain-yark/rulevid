@@ -31,7 +31,14 @@ export const register = async (req: Request, res: Response) => {
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     const authResponse: AuthResponse = {
-      user: { id: user.id, email: user.email, companyName: user.companyName || undefined },
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        companyName: user.companyName || undefined,
+        pricingTier: user.pricingTier,
+        status: user.status,
+        walletId: user.walletId || undefined
+      },
       token,
     };
 
@@ -63,7 +70,14 @@ export const login = async (req: Request, res: Response) => {
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     const authResponse: AuthResponse = {
-      user: { id: user.id, email: user.email, companyName: user.companyName || undefined },
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        companyName: user.companyName || undefined,
+        pricingTier: user.pricingTier,
+        status: user.status,
+        walletId: user.walletId || undefined
+      },
       token,
     };
 
@@ -95,7 +109,14 @@ export const getMe = async (req: Request, res: Response) => {
     }
 
     const authResponse: AuthResponse = {
-      user: { id: user.id, email: user.email, companyName: user.companyName || undefined },
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        companyName: user.companyName || undefined,
+        pricingTier: user.pricingTier,
+        status: user.status,
+        walletId: user.walletId || undefined
+      },
       token, // return same token
     };
 

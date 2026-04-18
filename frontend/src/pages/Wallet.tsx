@@ -6,26 +6,55 @@ interface WalletProps {
 }
 
 const Wallet: React.FC<WalletProps> = ({ onBack }) => {
-  const [balance, setBalance] = useState(124.50);
+  const [balance, setBalance] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const [isTopupModalOpen, setIsTopupModalOpen] = useState(false);
   const [topupAmount, setTopupAmount] = useState('100');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  React.useEffect(() => {
+    const fetchBalance = async () => {
+      const authToken = localStorage.getItem('auth_token');
+      try {
+        const res = await fetch('http://localhost:3001/api/v1/billing/balance', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        setBalance(data.balance);
+      } catch (e) {
+        console.error('Failed to fetch balance:', e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchBalance();
+  }, []);
+
   const transactions = [
     { id: 1, type: 'Top-up', amount: 100.00, date: '2025-01-15', status: 'Completed', icon: <ArrowUpRight color="#10b981" /> },
     { id: 2, type: 'Usage Deduction', amount: -37.50, date: '2025-01-14', status: 'Completed', icon: <ArrowDownLeft color="#f43f5e" /> },
-    { id: 3, type: 'Usage Deduction', amount: -12.20, date: '2025-01-13', status: 'Completed', icon: <ArrowDownLeft color="#f43f5e" /> },
-    { id: 4, type: 'Top-up', amount: 50.00, date: '2025-01-10', status: 'Completed', icon: <ArrowUpRight color="#10b981" /> },
   ];
 
-  const handleTopup = () => {
+  const handleTopup = async () => {
     setIsProcessing(true);
-    // Simulate Stripe redirect and success
-    setTimeout(() => {
+    const authToken = localStorage.getItem('auth_token');
+    try {
+      const res = await fetch('http://localhost:3001/api/v1/billing/topup', {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ amount: parseFloat(topupAmount) })
+      });
+      const data = await res.json();
+      if (data.checkout_url) {
+        window.location.href = data.checkout_url;
+      }
+    } catch (e) {
+      console.error('Topup failed:', e);
       setIsProcessing(false);
-      setIsTopupModalOpen(false);
-      setBalance(balance + parseFloat(topupAmount));
-    }, 2000);
+    }
   };
 
   return (

@@ -16,12 +16,28 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
+  const [balance, setBalance] = useState<number | null>(null);
 
   useEffect(() => {
     fetchSessions();
+    fetchBalance();
   }, []);
+
+  const fetchBalance = async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/billing/balance', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setBalance(data.balance);
+      }
+    } catch (e) {
+      console.error('Failed to load balance', e);
+    }
+  };
 
   const fetchSessions = async () => {
     const token = localStorage.getItem('auth_token');
@@ -100,7 +116,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <div className="stat-icon"><Clock size={24} /></div>
           <div className="stat-info">
             <span className="stat-label">Wallet Balance</span>
-            <span className="stat-value">$124.50</span>
+            <span className="stat-value">{balance !== null ? `$${balance.toFixed(2)}` : '...'}</span>
           </div>
         </div>
       </div>
