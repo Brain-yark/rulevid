@@ -23,20 +23,23 @@ model User {
 }
 
 model Session {
-  id               String        @id @default(uuid())
-  title            String
-  channelName      String        @unique
-  status           String        @default("scheduled") // scheduled, active, ended
-  startedAt        DateTime?
-  endedAt          DateTime?
-  participantCount Int           @default(0)
-  totalMinutes     Int           @default(0)
-  recordingUrl     String?
-  facilitator      User          @relation(fields: [facilitatorId], references: [id])
-  facilitatorId    String
-  usageRecords     UsageRecord[]
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id                  String        @id @default(uuid())
+  title               String
+  channelName         String        @unique
+  status              String        @default("scheduled") // scheduled, active, ended
+  startedAt           DateTime?
+  endedAt             DateTime?
+  participantCount    Int           @default(0)
+  totalMinutes        Int           @default(0)
+  recordingUrl        String?
+  recordingResourceId String?       // Agora Cloud Recording resource ID
+  recordingSid        String?       // Agora Cloud Recording session ID
+  agoraChatRoomId     String?       // Agora Chat Room ID
+  facilitator         User          @relation(fields: [facilitatorId], references: [id])
+  facilitatorId       String
+  usageRecords        UsageRecord[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 }
 
 model Transaction {

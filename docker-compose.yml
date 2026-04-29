@@ -1,6 +1,54 @@
 version: '3.8'
 
 services:
+  # --- Unified Entry Point ---
+  proxy:
+    image: nginx:alpine
+    container_name: svsm-proxy
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./infra/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+      - lago-api
+
+  # --- SVSM Services ---
+  backend:
+    build: ./backend
+    container_name: svsm-backend-dev
+    restart: always
+    # No public port mapping, accessed via proxy
+    command: npm run dev
+    environment:
+      - DATABASE_URL=postgresql://admin:password@db:5432/svsm?schema=public
+      - JWT_SECRET=${JWT_SECRET}
+      - AGORA_APP_ID=${AGORA_APP_ID}
+      - AGORA_APP_CERTIFICATE=${AGORA_APP_CERTIFICATE}
+      - AGORA_CUSTOMER_ID=${AGORA_CUSTOMER_ID}
+      - AGORA_API_KEY=${AGORA_API_KEY}
+      - AGORA_API_SECRET=${AGORA_API_SECRET}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - LAGO_API_KEY=${LAGO_API_KEY}
+      - FRONTEND_URL=${FRONTEND_URL}
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      target: builder
+    container_name: svsm-frontend-dev
+    restart: always
+    # No public port mapping, accessed via proxy
+    command: npm run dev -- --host --port 80
+    depends_on:
+      - backend
+
   db:
     image: postgres:15-alpine
     container_name: svsm-db
@@ -10,21 +58,62 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: svsm
     ports:
-      - '5432:5432'
+      - '5433:5432' # Changed to 5433 to avoid host conflicts
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: svsm-pgadmin
+  # --- Lago Services ---
+
+  lago-api:
+    build:
+      context: ../lago-api
+      dockerfile: Dockerfile
+    container_name: lago-api
+    restart: always
+    # No public port mapping, accessed via proxy
+    environment:
+      - RAILS_ENV=production
+      - DATABASE_URL=postgresql://lago:password@lago-db:5432/lago_production
+      - REDIS_URL=redis://lago-redis:6379/0
+      - LAGO_RSA_PRIVATE_KEY=${LAGO_RSA_PRIVATE_KEY}
+      - SECRET_KEY_BASE=${LAGO_SECRET_KEY_BASE}
+    depends_on:
+      - lago-db
+      - lago-redis
+
+  lago-worker:
+    build:
+      context: ../lago-api
+      dockerfile: Dockerfile
+    command: ["./scripts/start.worker.sh"]
+    container_name: lago-worker
     restart: always
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: password
-    ports:
-      - '5050:80'
+      - RAILS_ENV=production
+      - DATABASE_URL=postgresql://lago:password@lago-db:5432/lago_production
+      - REDIS_URL=redis://lago-redis:6379/0
     depends_on:
-      - db
+      - lago-db
+      - lago-redis
+
+  lago-db:
+    image: postgres:15-alpine
+    container_name: lago-db
+    restart: always
+    environment:
+      POSTGRES_USER: lago
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: lago_production
+    ports:
+      - '5434:5432' # Changed to 5434 to avoid host conflicts
+    volumes:
+      - lago_postgres_data:/var/lib/postgresql/data
+
+  lago-redis:
+    image: redis:7-alpine
+    container_name: lago-redis
+    restart: always
 
 volumes:
   postgres_data:
+  lago_postgres_data:

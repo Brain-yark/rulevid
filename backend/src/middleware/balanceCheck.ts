@@ -21,9 +21,9 @@ export const checkBalance = async (req: Request, res: Response, next: NextFuncti
     next();
   } catch (error) {
     console.error('Balance check middleware error:', error);
-    // On error, we might want to allow it or block it. 
-    // Usually safer to block or fail open depending on business logic.
-    // For now, let's allow it but log the error.
-    next();
+    // Fail-closed: Return 503 instead of allowing access or claiming balance is 0
+    return res.status(503).json({
+      error: 'Billing service is currently unavailable. Cannot verify balance to start session.',
+    });
   }
 };

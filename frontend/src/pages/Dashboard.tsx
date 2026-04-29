@@ -17,11 +17,21 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
   const [balance, setBalance] = useState<number | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    fetchSessions();
     fetchBalance();
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchSessions();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, filter]);
 
   const fetchBalance = async () => {
     const token = localStorage.getItem('auth_token');
@@ -44,7 +54,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     if (!token) return;
 
     try {
-      const response = await fetch('http://localhost:3001/api/v1/sessions', {
+      const query = new URLSearchParams();
+      if (search) query.append('search', search);
+      if (filter) query.append('status', filter);
+
+      const response = await fetch(`http://localhost:3001/api/v1/sessions?${query}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
@@ -109,7 +123,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <div className="stat-icon"><Users size={24} /></div>
           <div className="stat-info">
             <span className="stat-label">Total Participants</span>
-            <span className="stat-value">{sessions.reduce((acc, s) => acc + s.participantCount, 0)}</span>
+            <span className="stat-value">{sessions.reduce((acc, s) => acc + (s.participantCount || 0), 0)}</span>
           </div>
         </div>
         <div className="stat-card glass-card clickable" onClick={onGoToWallet}>
@@ -126,12 +140,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <h2>Your Sessions</h2>
           <div className="search-bar">
             <Search size={18} />
-            <input type="text" placeholder="Search sessions..." />
+            <input 
+              type="text" 
+              placeholder="Search sessions..." 
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-          <button className="filter-btn" onClick={() => alert('Filter options coming soon')}>
-            <Filter size={18} />
-            Filter
-          </button>
+          <select 
+            className="filter-select" 
+            value={filter} 
+            onChange={(e) => setFilter(e.target.value)}
+          >
+            <option value="">All Statuses</option>
+            <option value="active">Active Now</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="ended">Ended</option>
+          </select>
         </div>
 
         <div className="sessions-grid">
@@ -159,9 +184,32 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
               </div>
 
               <div className="session-actions">
-                <button className="join-btn active" onClick={() => onJoinRoom(session.id)}>
-                  <Play size={16} /> Join Room
-                </button>
+                {session.status === 'active' || session.status === 'scheduled' ? (
+                  <>
+                    <button className="join-btn active" onClick={() => onJoinRoom(session.id)}>
+                      <Play size={16} /> Join Room
+                    </button>
+                    {session.status === 'active' && (
+                      <button 
+                        className="end-session-row-btn" 
+                        onClick={async () => {
+                          if (confirm('End this session for everyone?')) {
+                            const token = localStorage.getItem('auth_token');
+                            await fetch(`http://localhost:3001/api/v1/sessions/${session.id}/end`, {
+                              method: 'POST',
+                              headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                            fetchSessions();
+                          }
+                        }}
+                      >
+                        End Session
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button className="join-btn disabled" disabled>Session Ended</button>
+                )}
               </div>
             </div>
           ))}
@@ -290,17 +338,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           outline: none;
         }
 
-        .filter-btn {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          background: none;
+        .filter-select {
+          background: rgba(255, 255, 255, 0.05);
           border: 1px solid var(--glass-border);
-          color: var(--text-main);
+          color: white;
           padding: 0.5rem 1rem;
           border-radius: 10px;
           cursor: pointer;
+          outline: none;
           transition: var(--transition-fast);
+        }
+        .filter-select option {
+          background: #1e1e24;
+          color: white;
         }
 
         .sessions-grid {
@@ -329,15 +379,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           font-weight: 600;
         }
 
-        .status-badge.live-now {
+        .status-badge.active {
           background: rgba(244, 63, 94, 0.1);
           color: var(--accent);
           border: 1px solid rgba(244, 63, 94, 0.2);
           animation: pulse 2s infinite;
         }
 
-        .status-badge.upcoming { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
-        .status-badge.scheduled { color: var(--text-muted); background: rgba(255, 255, 255, 0.05); }
+        .status-badge.scheduled { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+        .status-badge.ended { color: var(--text-muted); background: rgba(255, 255, 255, 0.05); }
 
         .session-type {
           font-size: 0.75rem;
@@ -391,6 +441,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
 
         .join-btn.active:hover {
           background: var(--primary-hover);
+        }
+
+        .end-session-row-btn {
+          margin-top: 0.5rem;
+          width: 100%;
+          padding: 0.75rem;
+          background: rgba(244, 63, 94, 0.1);
+          color: var(--accent);
+          border: 1px solid rgba(244, 63, 94, 0.2);
+          border-radius: 10px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: var(--transition-fast);
+        }
+
+        .end-session-row-btn:hover {
+          background: var(--accent);
+          color: white;
         }
 
         @keyframes pulse {

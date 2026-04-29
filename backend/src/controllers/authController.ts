@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../db';
-import { AuthResponse, User } from '@shared/types';
+import { billingService } from '../services/billingService';
+import { AuthResponse } from '../../../shared/types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
@@ -12,6 +13,10 @@ export const register = async (req: Request, res: Response) => {
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -28,23 +33,39 @@ export const register = async (req: Request, res: Response) => {
       },
     });
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    // ── Provision Lago customer + wallet (non-blocking — registration succeeds even on failure) ──
+    let finalWalletId: string | null = null;
+    try {
+      await billingService.createLagoCustomer(user.id, user.email);
+      finalWalletId = await billingService.createLagoWallet(user.id);
+      if (finalWalletId) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { walletId: finalWalletId },
+        });
+        console.log(`[Auth] Lago provisioning complete for ${user.email}`);
+      }
+    } catch (lagoErr) {
+      console.error('[Auth] Lago provisioning failed (non-fatal):', lagoErr);
+    }
+
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
     const authResponse: AuthResponse = {
-      user: { 
-        id: user.id, 
-        email: user.email, 
+      user: {
+        id: user.id,
+        email: user.email,
         companyName: user.companyName || undefined,
         pricingTier: user.pricingTier,
         status: user.status,
-        walletId: user.walletId || undefined
+        walletId: finalWalletId ?? undefined,
       },
       token,
     };
 
     return res.status(201).json(authResponse);
   } catch (error) {
-    console.error('Register error:', error);
+    console.error('[Auth] Register error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -67,29 +88,30 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
     const authResponse: AuthResponse = {
-      user: { 
-        id: user.id, 
-        email: user.email, 
+      user: {
+        id: user.id,
+        email: user.email,
         companyName: user.companyName || undefined,
         pricingTier: user.pricingTier,
         status: user.status,
-        walletId: user.walletId || undefined
+        walletId: user.walletId || undefined,
       },
       token,
     };
 
     return res.json(authResponse);
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('[Auth] Login error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 export const getMe = async (req: Request, res: Response) => {
   try {
+    // Extract and verify token (reusing authMiddleware pattern)
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -99,7 +121,7 @@ export const getMe = async (req: Request, res: Response) => {
     let decoded: any;
     try {
       decoded = jwt.verify(token, JWT_SECRET);
-    } catch (e) {
+    } catch {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
@@ -109,20 +131,20 @@ export const getMe = async (req: Request, res: Response) => {
     }
 
     const authResponse: AuthResponse = {
-      user: { 
-        id: user.id, 
-        email: user.email, 
+      user: {
+        id: user.id,
+        email: user.email,
         companyName: user.companyName || undefined,
         pricingTier: user.pricingTier,
         status: user.status,
-        walletId: user.walletId || undefined
+        walletId: user.walletId || undefined,
       },
-      token, // return same token
+      token,
     };
 
     return res.json(authResponse);
   } catch (error) {
-    console.error('getMe error:', error);
+    console.error('[Auth] getMe error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
