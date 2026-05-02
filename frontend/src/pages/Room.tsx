@@ -134,8 +134,8 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
   const tokenRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Agora Hooks
-  const { localMicrophoneTrack } = useLocalMicrophoneTrack();
-  const { localCameraTrack } = useLocalCameraTrack();
+  const { localMicrophoneTrack, error: micError } = useLocalMicrophoneTrack(isMicOn);
+  const { localCameraTrack, error: camError } = useLocalCameraTrack(isCameraOn);
   
   const { screenTrack, error: screenError } = useLocalScreenTrack(isSharing, defaultScreenConfig, "disable");
 
@@ -153,7 +153,21 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
     uid: config.uid
   });
 
-  usePublish([localMicrophoneTrack, localCameraTrack]);
+  const tracksToPublish = React.useMemo(() => {
+    const tracks = [];
+    if (localMicrophoneTrack) tracks.push(localMicrophoneTrack);
+    if (localCameraTrack) tracks.push(localCameraTrack);
+    if (isSharing && screenTrack) {
+      if (Array.isArray(screenTrack)) {
+        tracks.push(...screenTrack);
+      } else {
+        tracks.push(screenTrack);
+      }
+    }
+    return tracks;
+  }, [localMicrophoneTrack, localCameraTrack, isSharing, screenTrack]);
+
+  usePublish(tracksToPublish);
 
   useEffect(() => {
     console.log('[Room] Local tracks status:', {
@@ -294,20 +308,12 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(true);
 
-  const toggleMic = async () => {
-    if (localMicrophoneTrack) {
-      const newState = !isMicOn;
-      await localMicrophoneTrack.setMuted(!newState);
-      setIsMicOn(newState);
-    }
+  const toggleMic = () => {
+    setIsMicOn(prev => !prev);
   };
 
-  const toggleVideo = async () => {
-    if (localCameraTrack) {
-      const newState = !isCameraOn;
-      await localCameraTrack.setMuted(!newState);
-      setIsCameraOn(newState);
-    }
+  const toggleVideo = () => {
+    setIsCameraOn(prev => !prev);
   };
 
   const toggleScreenShare = () => {
