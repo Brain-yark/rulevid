@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 class BillingService {
-  private apiUrl = process.env.LAGO_API_URL || 'https://api.getlago.com';
+  private apiUrl = process.env.LAGO_API_URL || 'http://localhost:3000';
   private apiKey = process.env.LAGO_API_KEY;
 
   private get headers() {
