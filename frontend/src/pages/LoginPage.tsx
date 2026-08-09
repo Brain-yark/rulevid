@@ -121,6 +121,25 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           <button type="submit" className="login-submit" disabled={isLoading}>
             {isLoading ? 'Processing...' : (isLogin ? 'Access Dashboard' : 'Register Account')}
           </button>
+
+          <button 
+            type="button" 
+            className="demo-submit" 
+            onClick={() => {
+              const demoUser = {
+                id: 'demo-user-123',
+                email: 'facilitator@demo.svsm.io',
+                companyName: 'Acme Streaming Inc.',
+                pricingTier: 'standard',
+                status: 'active'
+              };
+              localStorage.setItem('auth_token', 'demo_jwt_token_svsm');
+              localStorage.setItem('user', JSON.stringify(demoUser));
+              onLogin(demoUser.email);
+            }}
+          >
+            ⚡ Quick Demo Access (Frontend Mode)
+          </button>
         </form>
         
         <div className="login-footer">
@@ -263,6 +282,26 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         .login-submit:disabled {
           opacity: 0.7;
           cursor: not-allowed;
+        }
+
+        .demo-submit {
+          width: 100%;
+          padding: 0.75rem;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--glass-border);
+          color: #a7f3d0;
+          border-radius: 10px;
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: var(--transition-fast);
+          margin-top: 0.75rem;
+        }
+
+        .demo-submit:hover {
+          background: rgba(16, 185, 129, 0.15);
+          border-color: rgba(16, 185, 129, 0.4);
+          transform: translateY(-1px);
         }
 
         .login-footer {

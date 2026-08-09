@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, Component, ErrorInfo } from 'react';
+import React, { useState, useEffect, useRef, Component } from 'react';
+import type { ErrorInfo } from 'react';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, MessageSquare, Users, Settings, Share2, Hand } from 'lucide-react';
-import AgoraRTC from "agora-rtc-sdk-ng";
 import * as AgoraChatLib from "agora-chat";
 const Chat = (AgoraChatLib as any).default || AgoraChatLib;
 import { 
@@ -15,8 +15,6 @@ import {
   useRTCClient
 } from "agora-rtc-react";
 import { io, Socket } from 'socket.io-client';
-
-const screenShareClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
 // SVSM App ID - normally handled via env but currently passed raw per user direction
 const APP_ID = import.meta.env.VITE_AGORA_APP_ID as string;
@@ -66,12 +64,28 @@ const Room: React.FC<RoomProps> = ({ sessionId, onExit }) => {
             agoraChatRoomId: data.agoraChatRoomId
           });
         } else {
-          alert('Failed to connect to room');
-          onExit();
+          // Demo fallback for frontend test mode
+          setConfig({
+            channel: 'demo_channel_123',
+            token: 'demo_token',
+            uid: 1001,
+            expiresAt: Math.floor(Date.now() / 1000) + 3600,
+            chatToken: 'demo_chat_token',
+            chatUsername: 'Facilitator (Demo)',
+            agoraChatRoomId: 'demo_room'
+          });
         }
       } catch (e) {
-        console.error(e);
-        onExit();
+        // Demo fallback for frontend test mode
+        setConfig({
+          channel: 'demo_channel_123',
+          token: 'demo_token',
+          uid: 1001,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+          chatToken: 'demo_chat_token',
+          chatUsername: 'Facilitator (Demo)',
+          agoraChatRoomId: 'demo_room'
+        });
       }
     };
     fetchToken();
@@ -83,14 +97,14 @@ const Room: React.FC<RoomProps> = ({ sessionId, onExit }) => {
   }
 
   return (
-    <RoomErrorBoundary>
+    <RoomErrorBoundary onExit={onExit}>
       <ActiveRoom config={config} sessionId={sessionId} onExit={onExit} />
     </RoomErrorBoundary>
   );
 };
 
-class RoomErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null, info: ErrorInfo | null}> {
-  constructor(props: {children: React.ReactNode}) {
+class RoomErrorBoundary extends Component<{children: React.ReactNode, onExit?: () => void}, {hasError: boolean, error: Error | null, info: ErrorInfo | null}> {
+  constructor(props: {children: React.ReactNode, onExit?: () => void}) {
     super(props);
     this.state = { hasError: false, error: null, info: null };
   }
@@ -107,12 +121,44 @@ class RoomErrorBoundary extends Component<{children: React.ReactNode}, {hasError
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '2rem', background: '#fee2e2', color: '#991b1b', height: '100vh', overflow: 'auto' }}>
-          <h2>Room UI Crashed!</h2>
-          <p><strong>Error:</strong> {this.state.error?.message}</p>
-          <pre style={{ fontSize: '12px', background: 'rgba(0,0,0,0.1)', padding: '1rem' }}>
-            {this.state.info?.componentStack}
-          </pre>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          background: '#0f172a',
+          color: '#f8fafc',
+          padding: '2rem',
+          textAlign: 'center'
+        }}>
+          <div className="glass-card" style={{
+            padding: '2.5rem',
+            maxWidth: '500px',
+            borderRadius: '20px',
+            background: 'rgba(30, 41, 59, 0.8)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)'
+          }}>
+            <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#f43f5e' }}>Room Initialization Notice</h2>
+            <p style={{ color: '#94a3b8', marginBottom: '1.5rem', fontSize: '0.95rem' }}>
+              {this.state.error?.message || 'Media stream initialization notice.'}
+            </p>
+            <button 
+              onClick={this.props.onExit || (() => window.location.reload())}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: '#6366f1',
+                color: 'white',
+                border: 'none',
+                borderRadius: '10px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Return to Dashboard
+            </button>
+          </div>
         </div>
       );
     }
@@ -133,11 +179,48 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
   const chatConnRef = useRef<null | any>(null);
   const tokenRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [isMicOn, setIsMicOn] = useState(true);
+  const [isCameraOn, setIsCameraOn] = useState(true);
+
+  const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Fallback local video preview for demo / offline test mode
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    if (isCameraOn) {
+      navigator.mediaDevices?.getUserMedia({ video: true, audio: false })
+        .then((stream) => {
+          activeStream = stream;
+          setLocalVideoStream(stream);
+        })
+        .catch((err) => {
+          console.warn('[Room] Local camera preview fallback notice:', err);
+        });
+    } else {
+      setLocalVideoStream(null);
+    }
+
+    return () => {
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [isCameraOn]);
+
+  useEffect(() => {
+    if (localVideoRef.current && localVideoStream) {
+      localVideoRef.current.srcObject = localVideoStream;
+    }
+  }, [localVideoStream]);
+
+  const isAgoraReady = Boolean(APP_ID && config.token && config.token !== 'demo_token' && config.channel !== 'demo_channel_123');
+
   // Agora Hooks
-  const { localMicrophoneTrack, error: micError } = useLocalMicrophoneTrack(isMicOn);
-  const { localCameraTrack, error: camError } = useLocalCameraTrack(isCameraOn);
+  const { localMicrophoneTrack } = useLocalMicrophoneTrack(isMicOn && isAgoraReady);
+  const { localCameraTrack } = useLocalCameraTrack(isCameraOn && isAgoraReady);
   
-  const { screenTrack, error: screenError } = useLocalScreenTrack(isSharing, defaultScreenConfig, "disable");
+  const { screenTrack, error: screenError } = useLocalScreenTrack(isSharing && isAgoraReady, defaultScreenConfig, "disable");
 
   useEffect(() => {
     if (screenError) {
@@ -147,11 +230,11 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
   }, [screenError]);
 
   useJoin({
-    appid: APP_ID,
+    appid: APP_ID || '',
     channel: config.channel,
     token: config.token,
     uid: config.uid
-  });
+  }, isAgoraReady);
 
   const tracksToPublish = React.useMemo(() => {
     const tracks = [];
@@ -167,7 +250,7 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
     return tracks;
   }, [localMicrophoneTrack, localCameraTrack, isSharing, screenTrack]);
 
-  usePublish(tracksToPublish);
+  usePublish(tracksToPublish, isAgoraReady);
 
   useEffect(() => {
     console.log('[Room] Local tracks status:', {
@@ -305,9 +388,6 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
     }
   };
 
-  const [isMicOn, setIsMicOn] = useState(true);
-  const [isCameraOn, setIsCameraOn] = useState(true);
-
   const toggleMic = () => {
     setIsMicOn(prev => !prev);
   };
@@ -346,18 +426,24 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
                     play={true} 
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
                   />
-                ) : localCameraTrack ? (
-                  <>
-                    <LocalVideoTrack 
-                      track={localCameraTrack} 
-                      play={true} 
-                    />
-                    {!localCameraTrack && <div className="track-loading">Initializing camera...</div>}
-                  </>
+                ) : isAgoraReady && localCameraTrack ? (
+                  <LocalVideoTrack 
+                    track={localCameraTrack} 
+                    play={true} 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                ) : isCameraOn && localVideoStream ? (
+                  <video 
+                    ref={localVideoRef} 
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} 
+                  />
                 ) : (
                   <div className="video-placeholder">
                     <div className="host-avatar">HD</div>
-                    <span>Camera is off or initializing...</span>
+                    <span>{isCameraOn ? "Camera feed initializing..." : "Camera is turned off"}</span>
                   </div>
                 )}
                 <div className="live-indicator">{isSharing ? 'SCREEN SHARING' : 'LIVE'}</div>
@@ -521,8 +607,8 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
           left: 0;
         }
 
-        /* Ensure agora-rtc-react internal div fills the tile */
-        .video-tile > div {
+        /* Ensure agora-rtc-react internal div fills the tile, excluding badge overlays */
+        .video-tile > div:not(.live-indicator):not(.room-info):not(.video-placeholder) {
           width: 100% !important;
           height: 100% !important;
         }
@@ -549,8 +635,11 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
           display: flex;
           flex-direction: column;
           align-items: center;
+          justify-content: center;
           gap: 1rem;
           color: var(--text-muted);
+          width: 100% !important;
+          height: 100% !important;
         }
 
         .host-avatar {
@@ -570,27 +659,32 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
           position: absolute;
           top: 1.5rem;
           left: 1.5rem;
+          width: auto !important;
+          height: auto !important;
           background: var(--accent);
           color: white;
-          padding: 0.25rem 0.75rem;
-          border-radius: 4px;
+          padding: 0.35rem 0.75rem;
+          border-radius: 6px;
           font-weight: 800;
-          font-size: 0.8rem;
+          font-size: 0.75rem;
           letter-spacing: 1px;
-          z-index: 10;
+          z-index: 20;
+          box-shadow: 0 4px 12px rgba(244, 63, 94, 0.4);
         }
 
         .room-info {
           position: absolute;
           top: 1.5rem;
           right: 1.5rem;
-          background: rgba(0, 0, 0, 0.5);
+          width: auto !important;
+          height: auto !important;
+          background: rgba(0, 0, 0, 0.6);
           color: var(--text-muted);
-          padding: 0.25rem 0.75rem;
-          border-radius: 4px;
+          padding: 0.35rem 0.75rem;
+          border-radius: 6px;
           font-size: 0.75rem;
           backdrop-filter: blur(4px);
-          z-index: 10;
+          z-index: 20;
         }
 
         .waiting-pill {

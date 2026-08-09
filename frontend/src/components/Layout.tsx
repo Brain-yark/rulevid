@@ -3,27 +3,34 @@ import { LogOut, LayoutDashboard, Wallet as WalletIcon, Video } from 'lucide-rea
 
 interface LayoutProps {
   user: { email: string } | null;
+  currentPage?: string;
   onLogout: () => void;
   onNavigate: (page: 'dashboard' | 'wallet') => void;
   children: React.ReactNode;
 }
 
-const Layout: React.FC<LayoutProps> = ({ user, onLogout, onNavigate, children }) => {
+const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate, children }) => {
   return (
     <div className="layout-container">
       <nav className="glass sticky-nav">
         <div className="nav-content">
-          <div className="logo">
+          <div className="logo" onClick={() => onNavigate('dashboard')} style={{ cursor: 'pointer' }}>
             <Video className="logo-icon" />
             <span>SVSM Platform</span>
           </div>
           
           <div className="nav-links">
-            <button onClick={() => onNavigate('dashboard')} className="nav-link">
+            <button 
+              onClick={() => onNavigate('dashboard')} 
+              className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}
+            >
               <LayoutDashboard size={20} />
               <span>Dashboard</span>
             </button>
-            <button onClick={() => onNavigate('wallet')} className="nav-link">
+            <button 
+              onClick={() => onNavigate('wallet')} 
+              className={`nav-link ${currentPage === 'wallet' ? 'active' : ''}`}
+            >
               <WalletIcon size={20} />
               <span>Wallet</span>
             </button>
@@ -102,6 +109,12 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout, onNavigate, children })
         .nav-link:hover {
           color: var(--text-main);
           background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+          color: white;
+          background: rgba(99, 102, 241, 0.2);
+          border: 1px solid rgba(99, 102, 241, 0.4);
         }
 
         .user-profile {

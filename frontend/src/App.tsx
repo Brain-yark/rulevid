@@ -88,7 +88,7 @@ const App: React.FC = () => {
 
   return (
     <AgoraRTCProvider client={client}>
-      <Layout user={user} onLogout={handleLogout} onNavigate={setCurrentPage}>
+      <Layout user={user} currentPage={currentPage} onLogout={handleLogout} onNavigate={setCurrentPage}>
         {renderPage()}
       </Layout>
     </AgoraRTCProvider>

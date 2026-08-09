@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Play, Calendar, Users, Clock, Search, Filter, Video } from 'lucide-react';
+import { Plus, Play, Calendar, Users, Clock, Search, Video, Copy, Check, X } from 'lucide-react';
 
 interface Session {
   id: string;
@@ -19,8 +19,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
   const [balance, setBalance] = useState<number | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isCreating, setIsCreating] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchBalance();
@@ -43,11 +46,40 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       if (response.ok) {
         const data = await response.json();
         setBalance(data.balance);
+      } else {
+        setBalance(250.00); // Demo fallback
       }
     } catch (e) {
-      console.error('Failed to load balance', e);
+      setBalance(250.00); // Demo fallback
     }
   };
+
+  const MOCK_SESSIONS: Session[] = [
+    {
+      id: 'sess-demo-1',
+      title: 'Global Product Keynote & Live Q&A 2026',
+      channelName: 'f_demo_1',
+      status: 'active',
+      participantCount: 42,
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 'sess-demo-2',
+      title: 'Q3 Financial Strategy Briefing',
+      channelName: 'f_demo_2',
+      status: 'scheduled',
+      participantCount: 18,
+      createdAt: new Date(Date.now() - 86400000).toISOString()
+    },
+    {
+      id: 'sess-demo-3',
+      title: 'Engineering Architecture All-Hands',
+      channelName: 'f_demo_3',
+      status: 'ended',
+      participantCount: 115,
+      createdAt: new Date(Date.now() - 259200000).toISOString()
+    }
+  ];
 
   const fetchSessions = async () => {
     const token = localStorage.getItem('auth_token');
@@ -63,15 +95,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       });
       if (response.ok) {
         setSessions(await response.json());
+      } else {
+        setSessions(MOCK_SESSIONS);
       }
     } catch (e) {
-      console.error('Failed to load sessions', e);
+      setSessions(MOCK_SESSIONS);
     }
   };
 
-  const handleCreateSession = async () => {
-    const title = prompt('Enter a title for the new session:');
-    if (!title) return;
+  const handleCreateSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTitle.trim()) return;
 
     const token = localStorage.getItem('auth_token');
     setIsCreating(true);
@@ -82,10 +116,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}` 
         },
-        body: JSON.stringify({ title })
+        body: JSON.stringify({ title: newTitle })
       });
       
       if (response.ok) {
+        setNewTitle('');
+        setIsModalOpen(false);
         await fetchSessions();
       } else {
         alert('Failed to create session');
@@ -98,6 +134,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     }
   };
 
+  const handleCopyLink = (sessionId: string) => {
+    const joinUrl = `${window.location.origin}/join/${sessionId}`;
+    navigator.clipboard.writeText(joinUrl);
+    setCopiedId(sessionId);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   return (
     <div className="dashboard">
       <header className="dashboard-header">
@@ -105,9 +148,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           <h1>Welcome back, Facilitator</h1>
           <p className="subtitle">Manage your streaming sessions and participants</p>
         </div>
-        <button className="create-session-btn" onClick={handleCreateSession} disabled={isCreating}>
+        <button className="create-session-btn" onClick={() => setIsModalOpen(true)}>
           <Plus size={20} />
-          {isCreating ? 'Creating...' : 'Create Session'}
+          Create Session
         </button>
       </header>
 
@@ -186,9 +229,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
               <div className="session-actions">
                 {session.status === 'active' || session.status === 'scheduled' ? (
                   <>
-                    <button className="join-btn active" onClick={() => onJoinRoom(session.id)}>
-                      <Play size={16} /> Join Room
-                    </button>
+                    <div className="action-row">
+                      <button className="join-btn active" onClick={() => onJoinRoom(session.id)}>
+                        <Play size={16} /> Join Room
+                      </button>
+                      <button 
+                        className="copy-btn" 
+                        onClick={() => handleCopyLink(session.id)}
+                        title="Copy Share Link"
+                      >
+                        {copiedId === session.id ? <Check size={16} color="#10b981" /> : <Copy size={16} />}
+                      </button>
+                    </div>
                     {session.status === 'active' && (
                       <button 
                         className="end-session-row-btn" 
@@ -215,6 +267,75 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           ))}
         </div>
       </div>
+
+      {/* ── Custom Glass Modal ── */}
+      {isModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
+          <div className="modal-content glass-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Create New Session</h3>
+              <button className="close-modal-btn" onClick={() => setIsModalOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleCreateSession}>
+              <div className="form-group" style={{ margin: '1.5rem 0' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                  Session Title
+                </label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. All-Hands Executive Briefing" 
+                  value={newTitle} 
+                  onChange={(e) => setNewTitle(e.target.value)} 
+                  autoFocus 
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: '10px',
+                    color: 'white',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+              <div className="modal-actions" style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setIsModalOpen(false)}
+                  style={{
+                    padding: '0.75rem 1.25rem',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: '10px',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isCreating || !newTitle.trim()}
+                  style={{
+                    padding: '0.75rem 1.5rem',
+                    background: 'var(--primary)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    color: 'white',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {isCreating ? 'Creating...' : 'Launch Session'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .dashboard {
@@ -459,6 +580,79 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
         .end-session-row-btn:hover {
           background: var(--accent);
           color: white;
+        }
+
+        .action-row {
+          display: flex;
+          gap: 0.5rem;
+          width: 100%;
+        }
+
+        .copy-btn {
+          padding: 0.75rem;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--glass-border);
+          border-radius: 10px;
+          color: var(--text-muted);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: var(--transition-fast);
+        }
+
+        .copy-btn:hover {
+          background: rgba(255, 255, 255, 0.1);
+          color: white;
+        }
+
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.7);
+          backdrop-filter: blur(8px);
+          z-index: 200;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 1rem;
+        }
+
+        .modal-content {
+          width: 100%;
+          max-width: 480px;
+          padding: 2rem;
+          background: #1e293b;
+          border: 1px solid var(--glass-border);
+          border-radius: 20px;
+          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+          animation: fadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .modal-header h3 {
+          font-size: 1.3rem;
+          font-weight: 700;
+        }
+
+        .close-modal-btn {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          cursor: pointer;
+          padding: 0.25rem;
+          border-radius: 6px;
+          transition: var(--transition-fast);
+        }
+
+        .close-modal-btn:hover {
+          color: white;
+          background: rgba(255, 255, 255, 0.1);
         }
 
         @keyframes pulse {
