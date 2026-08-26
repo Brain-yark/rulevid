@@ -150,6 +150,11 @@ export interface HostAnalytics {
   averageTicketPriceCents: number;
   averageFillRatePercent: number;
   totalBroadcastMinutes: number;
+  packageMinutesTotal?: number;
+  packageMinutesUsed?: number;
+  packageMinutesRemaining?: number;
+  packageName?: string;
+  walletBalance?: number;
   eventsBreakdown: HostAnalyticsEventItem[];
   recentSales: HostAnalyticsRecentSale[];
 }

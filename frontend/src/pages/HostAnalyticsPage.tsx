@@ -152,15 +152,37 @@ const HostAnalyticsPage: React.FC<HostAnalyticsPageProps> = ({
                 <Clock size={24} />
               </div>
               <div className="kpi-content">
-                <span className="kpi-label">Live Broadcast Minutes</span>
+                <span className="kpi-label">Live Broadcast Time</span>
                 <span className="kpi-value">{analytics?.totalBroadcastMinutes || 0} min</span>
-                <span className="kpi-subtext">HD WebRTC streaming time</span>
+                <span className="kpi-subtext">Total studio &amp; event streaming</span>
+              </div>
+            </div>
+
+            <div className="kpi-card glass-card">
+              <div className="kpi-icon" style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }}>
+                <Sparkles size={24} />
+              </div>
+              <div className="kpi-content">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="kpi-label">Package Minutes</span>
+                  <span style={{ fontSize: '0.72rem', color: '#818cf8', fontWeight: 600 }}>{analytics?.packageName || 'Free Tier'}</span>
+                </div>
+                <span className="kpi-value">
+                  {(analytics?.packageMinutesRemaining !== undefined ? analytics.packageMinutesRemaining : 3000).toLocaleString()} <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-muted)' }}>mins left</span>
+                </span>
+                <span className="kpi-subtext">
+                  Used: {(analytics?.packageMinutesUsed || 0).toLocaleString()} / {(analytics?.packageMinutesTotal || 3000).toLocaleString()} mins
+                </span>
               </div>
             </div>
           </div>
 
           {/* Secondary Metric Highlights */}
           <div className="secondary-metrics-row">
+            <div className="mini-metric glass">
+              <span className="mini-label">Wallet Balance</span>
+              <span className="mini-val" style={{ color: '#10b981' }}>${((analytics?.walletBalance || 0)).toFixed(2)} USD</span>
+            </div>
             <div className="mini-metric glass">
               <span className="mini-label">Average Ticket Price</span>
               <span className="mini-val">${avgTicketPrice.toFixed(2)}</span>

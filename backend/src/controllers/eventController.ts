@@ -4,6 +4,8 @@ import { generateAgoraToken } from '../services/agoraTokenService';
 import { agoraRecordingService } from '../services/agoraRecordingService';
 import { agoraChatService } from '../services/agoraChatService';
 import { stripeService } from '../services/stripeService';
+import { packageService } from '../services/packageService';
+import { billingService } from '../services/billingService';
 
 export const EARLY_START_BUFFER_MINUTES = 15;
 export const EARLY_START_BUFFER_MS = EARLY_START_BUFFER_MINUTES * 60 * 1000;
@@ -941,12 +943,25 @@ export const getHostAnalytics = async (req: Request, res: Response) => {
       orderBy: { startsAt: 'desc' },
     });
 
+    // Fetch ALL sessions for this host (both standalone studio sessions & event streams)
+    const allHostSessions = await prisma.session.findMany({
+      where: { facilitatorId: { in: facilitatorIds } },
+      select: { totalMinutes: true, status: true, startedAt: true, endedAt: true },
+    });
+
     let totalRevenueCents = 0;
     let totalTicketsSold = 0;
     let activeLiveEventsCount = 0;
     let upcomingEventsCount = 0;
     let completedEventsCount = 0;
+
+    // Calculate total live broadcast minutes across all sessions
     let totalBroadcastMinutes = 0;
+    for (const sess of allHostSessions) {
+      if (sess.totalMinutes && sess.totalMinutes > 0) {
+        totalBroadcastMinutes += sess.totalMinutes;
+      }
+    }
 
     let fillRateSum = 0;
     let fillRateCount = 0;
@@ -964,10 +979,6 @@ export const getHostAnalytics = async (req: Request, res: Response) => {
       if (ev.status === 'live') activeLiveEventsCount++;
       else if (ev.status === 'published') upcomingEventsCount++;
       else if (ev.status === 'ended') completedEventsCount++;
-
-      if (ev.session?.totalMinutes) {
-        totalBroadcastMinutes += ev.session.totalMinutes;
-      }
 
       let fillRatePercent = 0;
       if (ev.capacity && ev.capacity > 0) {
@@ -1012,6 +1023,17 @@ export const getHostAnalytics = async (req: Request, res: Response) => {
       ? Math.round(fillRateSum / fillRateCount)
       : 0;
 
+    // Fetch live package status and wallet balance
+    let packageStatusData: any = null;
+    let walletBalance = 0;
+    try {
+      packageStatusData = await packageService.getUserPackageStatus(userId);
+      const wallet = await billingService.getWalletBalance(userId);
+      walletBalance = wallet.balance;
+    } catch (e) {
+      // Non-fatal
+    }
+
     return res.json({
       totalRevenueCents,
       totalTicketsSold,
@@ -1022,6 +1044,11 @@ export const getHostAnalytics = async (req: Request, res: Response) => {
       averageTicketPriceCents,
       averageFillRatePercent,
       totalBroadcastMinutes,
+      packageMinutesTotal: packageStatusData?.packageMinutesTotal || 0,
+      packageMinutesUsed: packageStatusData?.packageMinutesUsed || 0,
+      packageMinutesRemaining: packageStatusData?.packageMinutesRemaining || 0,
+      packageName: packageStatusData?.package?.name || (packageStatusData?.hasPackage ? 'Host Plan' : 'Free Tier'),
+      walletBalance,
       eventsBreakdown,
       recentSales,
     });
