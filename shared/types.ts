@@ -4,6 +4,10 @@ export interface User {
   id: string;
   email: string;
   name?: string;
+  bio?: string;
+  avatarUrl?: string;
+  location?: string;
+  websiteUrl?: string;
   role: UserRole;
   emailVerified?: boolean;
   lastLoginAt?: string;
@@ -11,6 +15,54 @@ export interface User {
   pricingTier: string;
   status: string;
   walletId?: string;
+  createdAt?: string;
+}
+
+export interface UserProfileUpdateRequest {
+  name?: string;
+  bio?: string;
+  avatarUrl?: string;
+  location?: string;
+  websiteUrl?: string;
+  companyName?: string;
+  currentPassword?: string;
+  newPassword?: string;
+}
+
+export interface HostAnalyticsEventItem {
+  id: string;
+  title: string;
+  startsAt: string;
+  status: EventStatus;
+  priceCents: number;
+  capacity: number | null;
+  paidTicketsCount: number;
+  totalRevenueCents: number;
+  fillRatePercent: number;
+}
+
+export interface HostAnalyticsRecentSale {
+  ticketId: string;
+  eventId: string;
+  eventTitle: string;
+  buyerName: string;
+  buyerEmail: string;
+  amountCents: number;
+  purchasedAt: string;
+}
+
+export interface HostAnalytics {
+  totalRevenueCents: number;
+  totalTicketsSold: number;
+  totalEventsHosted: number;
+  activeLiveEventsCount: number;
+  upcomingEventsCount: number;
+  completedEventsCount: number;
+  averageTicketPriceCents: number;
+  averageFillRatePercent: number;
+  totalBroadcastMinutes: number;
+  eventsBreakdown: HostAnalyticsEventItem[];
+  recentSales: HostAnalyticsRecentSale[];
 }
 
 export interface Session {

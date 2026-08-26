@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Video, ShieldCheck, Zap, Globe, User, Users, Sparkles, Key } from 'lucide-react';
+import { Radio, ShieldCheck, Zap, Globe, User, Users, Sparkles, Key } from 'lucide-react';
 import { API_BASE } from '../config';
 import { useToast } from '../context/ToastContext';
 import type { UserRole } from '../../../shared/types';
@@ -70,7 +70,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       } else {
         toast.success(
           'Account Created!',
-          `Welcome to SVSM! You are registered as ${assignedRole}.`
+          `Welcome to RuleVid! You are registered as ${assignedRole}.`
         );
       }
 
@@ -95,11 +95,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     <div className="login-container">
       <div className="hero-section">
         <div className="logo-large">
-          <Video size={48} className="logo-icon" />
-          <h1>SVSM Live 2.0</h1>
+          <div className="login-logo-badge">
+            <Radio size={40} className="logo-icon" />
+          </div>
+          <h1>RuleVid</h1>
         </div>
         <p className="hero-subtitle">
-          Next-Generation Live Experience & Community Monetization Platform
+          Next-Generation Live Experience &amp; Community Monetization Platform
         </p>
 
         <div className="features-grid">
@@ -107,28 +109,28 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             <ShieldCheck size={24} className="feature-icon" />
             <div>
               <strong>CIA Security</strong>
-              <span>Gated access & verified credentials</span>
+              <span>Gated access &amp; verified credentials</span>
             </div>
           </div>
           <div className="feature-item">
             <Zap size={24} className="feature-icon" />
             <div>
               <strong>Low-Latency RTC</strong>
-              <span>Ultra-responsive HD video & chat</span>
+              <span>Ultra-responsive HD video &amp; chat</span>
             </div>
           </div>
           <div className="feature-item">
             <Sparkles size={24} className="feature-icon" />
             <div>
               <strong>Monetized Seats</strong>
-              <span>Instant Stripe Checkout & ticketing</span>
+              <span>Instant Stripe Checkout &amp; ticketing</span>
             </div>
           </div>
           <div className="feature-item">
             <Globe size={24} className="feature-icon" />
             <div>
               <strong>Role Scoped</strong>
-              <span>Host, Attendee, & Admin controls</span>
+              <span>Host, Attendee, &amp; Admin controls</span>
             </div>
           </div>
         </div>
@@ -138,8 +140,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         <h2>{isLogin ? 'Sign In' : 'Create Account'}</h2>
         <p className="login-desc">
           {isLogin
-            ? 'Access your SVSM account, tickets, and live sessions'
-            : 'Join SVSM to attend experiences or host your own community events'}
+            ? 'Access your RuleVid account, tickets, and live sessions'
+            : 'Join RuleVid to attend experiences or host your own community events'}
         </p>
 
         {!isLogin && (
@@ -283,10 +285,23 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           margin-bottom: 1rem;
         }
 
+        .login-logo-badge {
+          width: 58px;
+          height: 58px;
+          border-radius: 16px;
+          background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          box-shadow: 0 8px 24px rgba(99, 102, 241, 0.45);
+        }
+
         .logo-large h1 {
-          font-size: 2.6rem;
+          font-size: 2.8rem;
           font-weight: 800;
-          background: linear-gradient(135deg, var(--text-main), var(--primary));
+          letter-spacing: -0.02em;
+          background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
         }

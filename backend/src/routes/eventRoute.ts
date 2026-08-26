@@ -10,6 +10,7 @@ import {
   endEvent,
   updateEvent,
   deleteEvent,
+  getHostAnalytics,
 } from '../controllers/eventController';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 import { validateRequest } from '../middleware/validateRequest';
@@ -27,6 +28,9 @@ router.post(
 
 // List events (public discovery or host events)
 router.get('/', optionalAuth as RequestHandler, getEvents as unknown as RequestHandler);
+
+// Host performance analytics
+router.get('/analytics/host', requireAuth as RequestHandler, getHostAnalytics as unknown as RequestHandler);
 
 // Single event details & buyer ticket status
 router.get('/:id', optionalAuth as RequestHandler, getEventById as unknown as RequestHandler);

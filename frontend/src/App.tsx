@@ -4,6 +4,8 @@ import Dashboard from './pages/Dashboard';
 import SuperAdminPage from './pages/SuperAdminPage';
 import EventsPage from './pages/EventsPage';
 import EventDetailsPage from './pages/EventDetailsPage';
+import ProfilePage from './pages/ProfilePage';
+import HostAnalyticsPage from './pages/HostAnalyticsPage';
 import Room from './pages/Room';
 import Wallet from './pages/Wallet';
 import Layout from './components/Layout';
@@ -14,7 +16,7 @@ import type { User } from '../../shared/types';
 
 const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-type Page = 'login' | 'events' | 'event-details' | 'dashboard' | 'super-admin' | 'room' | 'wallet';
+type Page = 'login' | 'events' | 'event-details' | 'dashboard' | 'super-admin' | 'room' | 'wallet' | 'profile' | 'analytics';
 
 const App: React.FC = () => {
   const toast = useToast();
@@ -102,7 +104,7 @@ const App: React.FC = () => {
     setActiveSessionId(null);
     setActiveEventId(null);
     setCurrentPage('login');
-    toast.info('Signed Out', 'You have been successfully signed out of SVSM.');
+    toast.info('Signed Out', 'You have been successfully signed out of RuleVid.');
   };
 
   const navigateToEventDetails = (eventId: string) => {
@@ -136,6 +138,21 @@ const App: React.FC = () => {
               setCurrentPage('room');
             }}
             onViewEventDetails={navigateToEventDetails}
+          />
+        );
+      case 'profile':
+        return (
+          <ProfilePage
+            onUpdateUser={(updated) => setUser(updated)}
+            onNavigateToEvents={() => setCurrentPage('events')}
+            onNavigateToHostStudio={() => setCurrentPage('dashboard')}
+          />
+        );
+      case 'analytics':
+        return (
+          <HostAnalyticsPage
+            onGoToEventDetails={navigateToEventDetails}
+            onGoToHostStudio={() => setCurrentPage('dashboard')}
           />
         );
       case 'event-details':

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogOut, LayoutDashboard, Wallet as WalletIcon, Video, Ticket, ShieldAlert } from 'lucide-react';
+import { LogOut, LayoutDashboard, Wallet as WalletIcon, Ticket, ShieldAlert, TrendingUp, Radio } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
 import type { UserRole } from '../../../shared/types';
 
@@ -7,6 +7,7 @@ interface LayoutUser {
   id?: string;
   email: string;
   name?: string;
+  avatarUrl?: string;
   role?: UserRole;
 }
 
@@ -14,7 +15,7 @@ interface LayoutProps {
   user: LayoutUser | null;
   currentPage?: string;
   onLogout: () => void;
-  onNavigate: (page: 'events' | 'dashboard' | 'wallet' | 'super-admin') => void;
+  onNavigate: (page: 'events' | 'dashboard' | 'wallet' | 'super-admin' | 'profile' | 'analytics') => void;
   children: React.ReactNode;
 }
 
@@ -29,13 +30,17 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
     onLogout();
   };
 
+  const initial = user?.name ? user.name.charAt(0).toUpperCase() : user?.email.charAt(0).toUpperCase() || 'U';
+
   return (
     <div className="layout-container">
       <nav className="glass sticky-nav">
         <div className="nav-content">
           <div className="logo" onClick={() => onNavigate('events')} style={{ cursor: 'pointer' }}>
-            <Video className="logo-icon" />
-            <span>SVSM Live 2.0</span>
+            <div className="logo-badge">
+              <Radio className="logo-icon" size={20} />
+            </div>
+            <span className="brand-name">RuleVid</span>
           </div>
 
           <div className="nav-links">
@@ -54,6 +59,16 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
               >
                 <LayoutDashboard size={18} />
                 <span>Host Studio</span>
+              </button>
+            )}
+
+            {isHost && (
+              <button
+                onClick={() => onNavigate('analytics')}
+                className={`nav-link ${currentPage === 'analytics' ? 'active' : ''}`}
+              >
+                <TrendingUp size={18} />
+                <span>Analytics</span>
               </button>
             )}
 
@@ -77,27 +92,39 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
           </div>
 
           <div className="user-profile">
-            <div className="user-info-group">
-              <div className="user-name-row">
-                <span className="user-name">{user?.name || user?.email.split('@')[0]}</span>
-                <span className={`user-role-pill role-${role}`}>
-                  {role === 'host'
-                    ? 'HOST'
-                    : role === 'admin'
-                    ? 'ADMIN'
-                    : role === 'moderator'
-                    ? 'MOD'
-                    : role === 'super_admin'
-                    ? 'SUPER ADMIN'
-                    : 'ATTENDEE'}
-                </span>
+            <button
+              className={`user-profile-btn ${currentPage === 'profile' ? 'profile-active' : ''}`}
+              onClick={() => onNavigate('profile')}
+              title="View & Edit My Profile"
+            >
+              {user?.avatarUrl ? (
+                <img src={user.avatarUrl} alt={user.name || user.email} className="nav-avatar-img" />
+              ) : (
+                <div className="nav-avatar-initial">{initial}</div>
+              )}
+              <div className="user-info-group">
+                <div className="user-name-row">
+                  <span className="user-name">{user?.name || user?.email.split('@')[0]}</span>
+                  <span className={`user-role-pill role-${role}`}>
+                    {role === 'host'
+                      ? 'HOST'
+                      : role === 'admin'
+                      ? 'ADMIN'
+                      : role === 'moderator'
+                      ? 'MOD'
+                      : role === 'super_admin'
+                      ? 'SUPER ADMIN'
+                      : 'ATTENDEE'}
+                  </span>
+                </div>
+                <span className="user-email">{user?.email}</span>
               </div>
-              <span className="user-email">{user?.email}</span>
-            </div>
+            </button>
+
             <button
               onClick={() => setShowLogoutConfirm(true)}
               className="logout-btn"
-              title="Sign Out"
+              title="Sign Out of RuleVid"
             >
               <LogOut size={18} />
             </button>
@@ -109,7 +136,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
 
       <ConfirmationModal
         isOpen={showLogoutConfirm}
-        title="Sign Out of SVSM"
+        title="Sign Out of RuleVid"
         message="Are you sure you want to end your current session? You will need to log back in to access live rooms and your dashboard."
         confirmText="Sign Out"
         cancelText="Stay Signed In"
@@ -147,15 +174,33 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
         .logo {
           display: flex;
           align-items: center;
-          gap: 0.75rem;
+          gap: 0.65rem;
           font-weight: 800;
-          font-size: 1.25rem;
-          color: var(--primary);
-          letter-spacing: -0.01em;
+          font-size: 1.3rem;
+          letter-spacing: -0.02em;
+        }
+
+        .logo-badge {
+          width: 34px;
+          height: 34px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+        }
+
+        .brand-name {
+          background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          font-weight: 800;
         }
 
         .logo-icon {
-          color: var(--primary);
+          color: white;
         }
 
         .nav-links {
@@ -202,14 +247,57 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
         .user-profile {
           display: flex;
           align-items: center;
-          gap: 1rem;
+          gap: 0.75rem;
+        }
+
+        .user-profile-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid var(--glass-border);
+          border-radius: 14px;
+          padding: 0.35rem 0.75rem 0.35rem 0.45rem;
+          cursor: pointer;
+          transition: var(--transition-fast);
+          color: inherit;
+          text-align: left;
+        }
+
+        .user-profile-btn:hover {
+          background: rgba(255, 255, 255, 0.08);
+          border-color: rgba(99, 102, 241, 0.3);
+        }
+
+        .user-profile-btn.profile-active {
+          background: rgba(99, 102, 241, 0.18);
+          border-color: rgba(99, 102, 241, 0.45);
+        }
+
+        .nav-avatar-img,
+        .nav-avatar-initial {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          object-fit: cover;
+          flex-shrink: 0;
+        }
+
+        .nav-avatar-initial {
+          background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+          font-size: 0.85rem;
+          color: white;
         }
 
         .user-info-group {
           display: flex;
           flex-direction: column;
           align-items: flex-end;
-          gap: 0.15rem;
+          gap: 0.1rem;
         }
 
         .user-name-row {

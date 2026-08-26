@@ -274,7 +274,7 @@ const Wallet: React.FC<WalletProps> = () => {
         <div className="modal-overlay">
           <div className="modal-content glass-card animate-fade-in">
             <h2>Add Credits</h2>
-            <p>Choose an amount to add to your SVSM wallet.</p>
+            <p>Choose an amount to add to your RuleVid wallet.</p>
 
             <div className="amount-options">
               {['25', '50', '100', '250'].map((amt) => (

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../db';
 import { billingService } from '../services/billingService';
-import { AuthResponse, UserRole } from '../../../shared/types';
+import { AuthResponse, UserRole, User } from '../../../shared/types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
@@ -179,6 +179,10 @@ export const getMe = async (req: Request, res: Response) => {
         id: user.id,
         email: user.email,
         name: user.name || undefined,
+        bio: (user as any).bio || undefined,
+        avatarUrl: (user as any).avatarUrl || undefined,
+        location: (user as any).location || undefined,
+        websiteUrl: (user as any).websiteUrl || undefined,
         role: user.role as UserRole,
         emailVerified: user.emailVerified,
         lastLoginAt: user.lastLoginAt?.toISOString(),
@@ -186,6 +190,7 @@ export const getMe = async (req: Request, res: Response) => {
         pricingTier: user.pricingTier,
         status: user.status,
         walletId: user.walletId || undefined,
+        createdAt: user.createdAt?.toISOString(),
       },
       token,
     };
@@ -194,6 +199,86 @@ export const getMe = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[Auth] getMe error:', error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const updateProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const {
+      name,
+      bio,
+      avatarUrl,
+      location,
+      websiteUrl,
+      companyName,
+      currentPassword,
+      newPassword,
+    } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const updateData: any = {};
+
+    if (name !== undefined) updateData.name = name.trim() || null;
+    if (bio !== undefined) updateData.bio = bio.trim() || null;
+    if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl.trim() || null;
+    if (location !== undefined) updateData.location = location.trim() || null;
+    if (websiteUrl !== undefined) updateData.websiteUrl = websiteUrl.trim() || null;
+    if (companyName !== undefined) updateData.companyName = companyName.trim() || null;
+
+    // Handle password change if requested
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Current password is required to set a new password' });
+      }
+      const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!isMatch) {
+        return res.status(400).json({ error: 'Incorrect current password' });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
+      }
+      updateData.passwordHash = await bcrypt.hash(newPassword, 10);
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+    });
+
+    const sanitizedUser: User = {
+      id: updated.id,
+      email: updated.email,
+      name: updated.name || undefined,
+      bio: (updated as any).bio || undefined,
+      avatarUrl: (updated as any).avatarUrl || undefined,
+      location: (updated as any).location || undefined,
+      websiteUrl: (updated as any).websiteUrl || undefined,
+      role: updated.role as UserRole,
+      emailVerified: updated.emailVerified,
+      lastLoginAt: updated.lastLoginAt?.toISOString(),
+      companyName: updated.companyName || undefined,
+      pricingTier: updated.pricingTier,
+      status: updated.status,
+      walletId: updated.walletId || undefined,
+      createdAt: updated.createdAt?.toISOString(),
+    };
+
+    return res.json({
+      message: 'Profile updated successfully',
+      user: sanitizedUser,
+    });
+  } catch (error: any) {
+    console.error('[Auth] updateProfile error:', error);
+    return res.status(500).json({ error: 'Failed to update profile', details: error.message });
   }
 };
 

@@ -256,7 +256,7 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
             <h3>About This Experience</h3>
             <p className="description-text">
               {event.description ||
-                'Join this interactive live streaming session on SVSM Live. Engage in real-time discussion and high-definition video.'}
+                'Join this interactive live streaming session on RuleVid. Engage in real-time discussion and high-definition video.'}
             </p>
           </div>
 

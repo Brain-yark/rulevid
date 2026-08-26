@@ -11,6 +11,10 @@ model User {
   email            String        @unique
   passwordHash     String
   name             String?
+  bio              String?
+  avatarUrl        String?
+  location         String?
+  websiteUrl       String?
   role             String        @default("user")     // user (attendee), host (facilitator), moderator, admin, super_admin
   emailVerified    Boolean       @default(false)
   lastLoginAt      DateTime?

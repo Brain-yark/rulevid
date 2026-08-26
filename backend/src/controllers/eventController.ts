@@ -837,3 +837,130 @@ export const deleteEvent = async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to delete event' });
   }
 };
+
+/**
+ * GET /api/v1/events/analytics/host
+ * Retrieves deep host performance analytics, revenue breakdown, and attendance rates.
+ */
+export const getHostAnalytics = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+    let facilitatorIds = [userId];
+
+    if (currentUser?.companyName) {
+      const companyUsers = await prisma.user.findMany({
+        where: { companyName: currentUser.companyName },
+        select: { id: true },
+      });
+      facilitatorIds = companyUsers.map(u => u.id);
+    }
+
+    // Fetch all events for this host
+    const events = await prisma.event.findMany({
+      where: { facilitatorId: { in: facilitatorIds } },
+      include: {
+        session: { select: { totalMinutes: true, status: true } },
+        tickets: {
+          where: { status: 'paid' },
+          include: {
+            user: { select: { name: true, email: true } },
+          },
+        },
+      },
+      orderBy: { startsAt: 'desc' },
+    });
+
+    let totalRevenueCents = 0;
+    let totalTicketsSold = 0;
+    let activeLiveEventsCount = 0;
+    let upcomingEventsCount = 0;
+    let completedEventsCount = 0;
+    let totalBroadcastMinutes = 0;
+
+    let fillRateSum = 0;
+    let fillRateCount = 0;
+
+    const allRecentSales: any[] = [];
+
+    const eventsBreakdown = events.map((ev) => {
+      const paidTickets = ev.tickets || [];
+      const eventRevenue = paidTickets.reduce((sum, t) => sum + (t.amountCents || 0), 0);
+      const ticketsCount = paidTickets.length;
+
+      totalRevenueCents += eventRevenue;
+      totalTicketsSold += ticketsCount;
+
+      if (ev.status === 'live') activeLiveEventsCount++;
+      else if (ev.status === 'published') upcomingEventsCount++;
+      else if (ev.status === 'ended') completedEventsCount++;
+
+      if (ev.session?.totalMinutes) {
+        totalBroadcastMinutes += ev.session.totalMinutes;
+      }
+
+      let fillRatePercent = 0;
+      if (ev.capacity && ev.capacity > 0) {
+        fillRatePercent = Math.min(100, Math.round((ticketsCount / ev.capacity) * 100));
+        fillRateSum += fillRatePercent;
+        fillRateCount++;
+      }
+
+      paidTickets.forEach((t) => {
+        allRecentSales.push({
+          ticketId: t.id,
+          eventId: ev.id,
+          eventTitle: ev.title,
+          buyerName: t.user?.name || t.user?.email?.split('@')[0] || 'Attendee',
+          buyerEmail: t.user?.email || 'attendee@example.com',
+          amountCents: t.amountCents,
+          purchasedAt: t.createdAt.toISOString(),
+        });
+      });
+
+      return {
+        id: ev.id,
+        title: ev.title,
+        startsAt: ev.startsAt.toISOString(),
+        status: ev.status as any,
+        priceCents: ev.priceCents,
+        capacity: ev.capacity,
+        paidTicketsCount: ticketsCount,
+        totalRevenueCents: eventRevenue,
+        fillRatePercent,
+      };
+    });
+
+    allRecentSales.sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
+    const recentSales = allRecentSales.slice(0, 25);
+
+    const averageTicketPriceCents = totalTicketsSold > 0
+      ? Math.round(totalRevenueCents / totalTicketsSold)
+      : 0;
+
+    const averageFillRatePercent = fillRateCount > 0
+      ? Math.round(fillRateSum / fillRateCount)
+      : 0;
+
+    return res.json({
+      totalRevenueCents,
+      totalTicketsSold,
+      totalEventsHosted: events.length,
+      activeLiveEventsCount,
+      upcomingEventsCount,
+      completedEventsCount,
+      averageTicketPriceCents,
+      averageFillRatePercent,
+      totalBroadcastMinutes,
+      eventsBreakdown,
+      recentSales,
+    });
+  } catch (error: any) {
+    console.error('[Event] Host Analytics Error:', error);
+    return res.status(500).json({ error: 'Failed to fetch host analytics', details: error.message });
+  }
+};
