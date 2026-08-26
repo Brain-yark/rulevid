@@ -61,6 +61,18 @@ export const createEvent = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Title and start date/time are required' });
     }
 
+    // Check if user has selected a host billing package (Free, Starter, Growth, Scale)
+    if (user.role !== 'admin' && user.role !== 'super_admin') {
+      const hostUser = await prisma.user.findUnique({ where: { id: userId } });
+      if (!hostUser?.billingPackageId && hostUser?.packageMinutesTotal === 0) {
+        return res.status(403).json({
+          error: 'Billing package selection required',
+          requiresPackage: true,
+          message: 'All hosts must select a billing tier (Free, Starter, Growth, or Scale) from the marketplace before hosting events.',
+        });
+      }
+    }
+
     // Automatically elevate user role to host if creating an event
     await prisma.user.update({
       where: { id: userId },
@@ -432,6 +444,28 @@ export const startEvent = async (req: Request, res: Response) => {
       });
     }
 
+    // ── Billing Package & Balance Check ────────────────────────────────────
+    const isSuperOrAdmin = (req as any).user?.role === 'admin' || (req as any).user?.role === 'super_admin';
+    if (!isSuperOrAdmin) {
+      const hostUser = await prisma.user.findUnique({ where: { id: userId } });
+      if (!hostUser?.billingPackageId && (hostUser?.packageMinutesTotal || 0) === 0) {
+        return res.status(403).json({
+          error: 'Billing package selection required',
+          requiresPackage: true,
+          message: 'Please choose a host package from the billing marketplace before going live.',
+        });
+      }
+
+      const remaining = Math.max(0, (hostUser?.packageMinutesTotal || 0) - (hostUser?.packageMinutesUsed || 0));
+      if (remaining <= 0 && (!hostUser?.stripePaymentMethodId || !hostUser?.overageConsent)) {
+        return res.status(402).json({
+          error: 'Insufficient participant-minutes',
+          requiresTopup: true,
+          message: 'Your participant-minute balance is 0. Please top up your package or enable automatic overage protection to start this live stream.',
+        });
+      }
+    }
+
     let session = event.session;
 
     if (!session) {
@@ -461,18 +495,49 @@ export const startEvent = async (req: Request, res: Response) => {
         },
       });
     } else {
-      // Re-activate if scheduled
-      if (session.status !== 'active') {
+      // Re-activate only if session is still in progress (not ended)
+      // If the previous session is ended, create a fresh one for a re-run
+      if (session.status === 'ended') {
+        const channelName = `e_${event.id.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10)}_${Date.now()}`;
+        const chatUsername = getChatUsername(userEmail);
+        await agoraChatService.registerUser(chatUsername);
+        const agoraChatRoomId = await agoraChatService.createChatRoom(event.title, chatUsername);
+
+        session = await prisma.session.create({
+          data: {
+            title: event.title,
+            channelName,
+            facilitatorId: userId,
+            status: 'active',
+            startedAt: new Date(),
+            agoraChatRoomId,
+          },
+        });
+
+        await prisma.event.update({
+          where: { id: id as string },
+          data: { sessionId: session.id, status: 'live' },
+        });
+      } else if (session.status !== 'active') {
+        // Scheduled -> activate without creating a duplicate
         session = await prisma.session.update({
           where: { id: session.id },
           data: { status: 'active', startedAt: session.startedAt || new Date() },
         });
-      }
-      if (event.status !== 'live') {
-        await prisma.event.update({
-          where: { id: id as string },
-          data: { status: 'live' },
-        });
+        if (event.status !== 'live') {
+          await prisma.event.update({
+            where: { id: id as string },
+            data: { status: 'live' },
+          });
+        }
+      } else {
+        // Already active — just ensure event is marked live
+        if (event.status !== 'live') {
+          await prisma.event.update({
+            where: { id: id as string },
+            data: { status: 'live' },
+          });
+        }
       }
     }
 
@@ -698,7 +763,8 @@ export const endEvent = async (req: Request, res: Response) => {
     if (event.session) {
       const startedAt = event.session.startedAt || event.session.createdAt;
       const durationMs = endedAt.getTime() - startedAt.getTime();
-      const totalMinutes = Math.ceil(durationMs / 60000);
+      // Use Math.round so analytics totalMinutes matches billing deduction math
+      const totalMinutes = Math.round(durationMs / 60000);
 
       await prisma.session.update({
         where: { id: event.session.id },

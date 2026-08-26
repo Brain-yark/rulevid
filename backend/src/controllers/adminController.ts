@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../db';
 import { billingService } from '../services/billingService';
-import { UserRole } from '../../../shared/types';
+import { UserRole } from '@shared/types';
 import { logger } from '../logger';
 
 export const getOverviewStats = async (req: Request, res: Response) => {
@@ -404,6 +404,202 @@ export const getAllTransactions = async (req: Request, res: Response) => {
   }
 };
 
+export const getAdminPackages = async (_req: Request, res: Response) => {
+  try {
+    const packages = await prisma.billingPackage.findMany({
+      orderBy: { priceCents: 'asc' },
+      include: {
+        _count: {
+          select: { users: true },
+        },
+      },
+    });
+    return res.json(packages);
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] getAdminPackages error');
+    return res.status(500).json({ error: 'Failed to retrieve packages' });
+  }
+};
+
+export const updateAdminPackage = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const {
+      name,
+      participantMinutes,
+      priceCents,
+      effectiveRatePer1k,
+      roughlyCovers,
+      overageBlockCents,
+      overageBlockMinutes,
+      description,
+      isActive,
+      isCustom,
+    } = req.body;
+
+    const existing = await prisma.billingPackage.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Billing package not found' });
+    }
+
+    const updated = await prisma.billingPackage.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(participantMinutes !== undefined ? { participantMinutes: parseInt(participantMinutes, 10) } : {}),
+        ...(priceCents !== undefined ? { priceCents: parseInt(priceCents, 10) } : {}),
+        ...(effectiveRatePer1k !== undefined ? { effectiveRatePer1k } : {}),
+        ...(roughlyCovers !== undefined ? { roughlyCovers } : {}),
+        ...(overageBlockCents !== undefined ? { overageBlockCents: parseInt(overageBlockCents, 10) } : {}),
+        ...(overageBlockMinutes !== undefined ? { overageBlockMinutes: parseInt(overageBlockMinutes, 10) } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
+        ...(isCustom !== undefined ? { isCustom: Boolean(isCustom) } : {}),
+      },
+    });
+
+    logger.info(`[Admin] Package ${updated.name} (${updated.slug}) updated by admin`);
+    return res.json({
+      message: `Package "${updated.name}" successfully updated`,
+      package: updated,
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] updateAdminPackage error');
+    return res.status(500).json({ error: 'Failed to update billing package' });
+  }
+};
+
+export const createAdminPackage = async (req: Request, res: Response) => {
+  try {
+    const {
+      name,
+      slug,
+      participantMinutes,
+      priceCents,
+      effectiveRatePer1k,
+      roughlyCovers,
+      overageBlockCents = 1000,
+      overageBlockMinutes = 10000,
+      description,
+      isActive = true,
+      isCustom = false,
+    } = req.body;
+
+    if (!name || !slug || participantMinutes === undefined || priceCents === undefined) {
+      return res.status(400).json({ error: 'Name, slug, participantMinutes, and priceCents are required' });
+    }
+
+    const created = await prisma.billingPackage.create({
+      data: {
+        name,
+        slug: slug.toLowerCase().trim(),
+        participantMinutes: parseInt(participantMinutes, 10),
+        priceCents: parseInt(priceCents, 10),
+        effectiveRatePer1k,
+        roughlyCovers,
+        overageBlockCents: parseInt(overageBlockCents, 10),
+        overageBlockMinutes: parseInt(overageBlockMinutes, 10),
+        description,
+        isActive: Boolean(isActive),
+        isCustom: Boolean(isCustom),
+      },
+    });
+
+    logger.info(`[Admin] New package tier created: ${created.name} (${created.slug})`);
+    return res.status(201).json({
+      message: `Package "${created.name}" successfully created`,
+      package: created,
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] createAdminPackage error');
+    return res.status(500).json({ error: 'Failed to create billing package' });
+  }
+};
+
+export const getAllOverages = async (req: Request, res: Response) => {
+  try {
+    const page = typeof req.query.page === 'string' ? req.query.page : '1';
+    const limit = typeof req.query.limit === 'string' ? req.query.limit : '50';
+
+    const take = parseInt(limit, 10) || 50;
+    const skip = ((parseInt(page, 10) || 1) - 1) * take;
+
+    const [overages, total, totalAmountSum] = await Promise.all([
+      prisma.overageCharge.findMany({
+        take,
+        skip,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: { id: true, email: true, name: true, companyName: true },
+          },
+        },
+      }),
+      prisma.overageCharge.count(),
+      prisma.overageCharge.aggregate({
+        _sum: { amountCents: true, minutesCredited: true },
+      }),
+    ]);
+
+    return res.json({
+      overages,
+      summary: {
+        totalChargesCount: total,
+        totalOverageRevenueCents: totalAmountSum._sum.amountCents || 0,
+        totalOverageRevenueUsd: (totalAmountSum._sum.amountCents || 0) / 100,
+        totalMinutesCredited: totalAmountSum._sum.minutesCredited || 0,
+      },
+      pagination: {
+        total,
+        page: parseInt(page, 10) || 1,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+      },
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] getAllOverages error');
+    return res.status(500).json({ error: 'Failed to retrieve overage records' });
+  }
+};
+
+export const updateUserBilling = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const { packageMinutesTotal, packageMinutesUsed, billingPackageId, overageConsent } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const updateData: any = {};
+    if (packageMinutesTotal !== undefined) updateData.packageMinutesTotal = parseInt(packageMinutesTotal, 10);
+    if (packageMinutesUsed !== undefined) updateData.packageMinutesUsed = parseInt(packageMinutesUsed, 10);
+    if (billingPackageId !== undefined) updateData.billingPackageId = billingPackageId;
+    if (overageConsent !== undefined) updateData.overageConsent = Boolean(overageConsent);
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: updateData,
+      include: { billingPackage: true },
+    });
+
+    logger.info(`[Admin] User ${user.email} billing profile manually adjusted`);
+    return res.json({
+      message: 'User billing parameters updated successfully',
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        packageMinutesTotal: updatedUser.packageMinutesTotal,
+        packageMinutesUsed: updatedUser.packageMinutesUsed,
+        billingPackage: updatedUser.billingPackage,
+        overageConsent: updatedUser.overageConsent,
+      },
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] updateUserBilling error');
+    return res.status(500).json({ error: 'Failed to update user billing' });
+  }
+};
+
 export const ensureSuperAdmin = async () => {
   const superAdminEmail = 'superadmin@svsm.io';
   const superAdminPassword = 'SuperAdmin@2026!';
@@ -455,3 +651,4 @@ export const seedSuperAdminHandler = async (_req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to seed super admin' });
   }
 };
+

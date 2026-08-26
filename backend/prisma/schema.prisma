@@ -19,17 +19,58 @@ model User {
   emailVerified    Boolean       @default(false)
   lastLoginAt      DateTime?
   companyName      String?
-  walletId         String?       // Reference to Lago wallet
-  stripeCustomerId String?
-  pricingTier      String        @default("standard") // standard: $0.003, premium: $0.004
-  status           String        @default("active")   // active, suspended, pending
-  sessions         Session[]     @relation("FacilitatorSessions")
-  eventsHosted     Event[]       @relation("FacilitatorEvents")
-  tickets          Ticket[]
-  transactions     Transaction[]
-  usageRecords     UsageRecord[]
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  walletId               String?         // Reference to Lago wallet
+  stripeCustomerId       String?
+  stripePaymentMethodId   String?         // Default saved payment method for 1-click & overage
+  pricingTier            String          @default("standard") // standard: $0.003, premium: $0.004
+  billingPackageId       String?
+  billingPackage         BillingPackage? @relation(fields: [billingPackageId], references: [id])
+  packageMinutesTotal    Int             @default(0)          // Purchased or granted participant-minutes for current cycle
+  packageMinutesUsed     Int             @default(0)          // Consumed participant-minutes in current cycle
+  packageCycleStartedAt  DateTime?
+  packageCycleExpiresAt  DateTime?                            // Monthly reset date
+  overageConsent         Boolean         @default(false)      // Host pre-consented to auto-charge $10 overage blocks
+  status                 String          @default("active")   // active, suspended, pending
+  sessions               Session[]       @relation("FacilitatorSessions")
+  eventsHosted           Event[]         @relation("FacilitatorEvents")
+  tickets                Ticket[]
+  transactions           Transaction[]
+  usageRecords           UsageRecord[]
+  overageCharges         OverageCharge[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+}
+
+model BillingPackage {
+  id                    String    @id @default(uuid())
+  name                  String    // Free, Starter, Growth, Scale
+  slug                  String    @unique // free, starter, growth, scale
+  participantMinutes    Int       // 3000, 30000, 150000, 750000
+  priceCents            Int       // 0, 3000, 13000, 0
+  effectiveRatePer1k    String?   // "—", "$1.00/1k", "$0.87/1k", "negotiated"
+  roughlyCovers         String?   // "~1 small event", "~10 events...", "~50 events...", "high-volume hosts"
+  overageBlockCents     Int       @default(1000)  // $10 block = 1000 cents
+  overageBlockMinutes   Int       @default(10000) // 10,000 participant-minutes per block
+  description           String?
+  isActive              Boolean   @default(true)
+  isCustom              Boolean   @default(false) // true for Scale/custom
+  users                 User[]
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model OverageCharge {
+  id                    String    @id @default(uuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id])
+  sessionId             String?
+  amountCents           Int       // e.g. 1000 = $10.00
+  minutesCredited       Int       // e.g. 10000 minutes
+  stripePaymentIntentId String?
+  status                String    @default("succeeded") // succeeded, failed, refunded
+  receiptUrl            String?
+  description           String?
+  createdAt             DateTime  @default(now())
 }
 
 model Session {
@@ -86,7 +127,7 @@ model Ticket {
 
 model Transaction {
   id                 String   @id @default(uuid())
-  type               String   // topup, deduction
+  type               String   // topup, deduction, package_subscription, overage_charge
   amount             Float
   currency           String   @default("USD")
   balanceAfter       Float

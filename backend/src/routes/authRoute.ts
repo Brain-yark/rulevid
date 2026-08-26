@@ -3,7 +3,7 @@ import { register, login, getMe, updateProfile } from '../controllers/authContro
 import rateLimit from 'express-rate-limit';
 import { validateRequest } from '../middleware/validateRequest';
 import { requireAuth } from '../middleware/authMiddleware';
-import { registerSchema, loginSchema } from '../../../shared/schemas';
+import { registerSchema, loginSchema } from '@shared/schemas';
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes

@@ -1,5 +1,35 @@
 export type UserRole = 'user' | 'host' | 'moderator' | 'admin' | 'super_admin';
 
+export interface BillingPackage {
+  id: string;
+  name: string;
+  slug: string; // 'free' | 'starter' | 'growth' | 'scale'
+  participantMinutes: number;
+  priceCents: number;
+  effectiveRatePer1k?: string | null;
+  roughlyCovers?: string | null;
+  overageBlockCents: number;
+  overageBlockMinutes: number;
+  description?: string | null;
+  isActive: boolean;
+  isCustom: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface OverageCharge {
+  id: string;
+  userId: string;
+  sessionId?: string | null;
+  amountCents: number;
+  minutesCredited: number;
+  stripePaymentIntentId?: string | null;
+  status: string;
+  receiptUrl?: string | null;
+  description?: string | null;
+  createdAt: string | Date;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -15,7 +45,66 @@ export interface User {
   pricingTier: string;
   status: string;
   walletId?: string;
+  stripeCustomerId?: string;
+  stripePaymentMethodId?: string;
+  billingPackageId?: string;
+  billingPackage?: BillingPackage;
+  packageMinutesTotal: number;
+  packageMinutesUsed: number;
+  packageCycleStartedAt?: string;
+  packageCycleExpiresAt?: string;
+  overageConsent: boolean;
   createdAt?: string;
+}
+
+export interface UserPackageStatus {
+  hasPackage: boolean;
+  package: BillingPackage | null;
+  packageMinutesTotal: number;
+  packageMinutesUsed: number;
+  packageMinutesRemaining: number;
+  percentRemaining: number;
+  isLowBalance: boolean;
+  isDepleted: boolean;
+  overageConsent: boolean;
+  hasSavedCard: boolean;
+  packageCycleStartedAt: string | null;
+  packageCycleExpiresAt: string | null;
+  daysUntilReset: number | null;
+}
+
+export interface LowBalanceWarningPayload {
+  sessionId: string;
+  channelName: string;
+  participantCount: number;
+  minutesRemaining: number;
+  percentRemaining: number;
+  estimatedMinutesLeft: number;
+  message: string;
+  canOneClickTopup: boolean;
+  overageConsent: boolean;
+}
+
+export interface GracePeriodPayload {
+  sessionId: string;
+  secondsRemaining: number;
+  message: string;
+}
+
+export interface StreamEndingPayload {
+  sessionId: string;
+  reason: 'depleted_balance_no_consent' | 'grace_expired';
+  message: string;
+}
+
+export interface OverageChargedPayload {
+  sessionId: string;
+  amountCents: number;
+  amountUsd: number;
+  minutesCredited: number;
+  newBalanceRemaining: number;
+  receiptUrl?: string | null;
+  message: string;
 }
 
 export interface UserProfileUpdateRequest {

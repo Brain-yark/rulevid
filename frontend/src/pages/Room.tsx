@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, Component } from 'react';
 import type { ErrorInfo } from 'react';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, MessageSquare, Users, Settings, Share2, Hand } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, MessageSquare, Users, Settings, Share2, Hand, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
 import * as AgoraChatLib from "agora-chat";
 const Chat = (AgoraChatLib as any).default || AgoraChatLib;
 import { 
@@ -399,12 +399,35 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
     };
   }, [config.chatUsername, config.chatToken, config.agoraChatRoomId]);
 
-  // ─── Socket.io Presence (Legacy Chat removed) ───────────────────────────────
+  // In-stream Billing & Low Balance States
+  const [lowBalanceAlert, setLowBalanceAlert] = useState<{
+    minutesRemaining: number;
+    estimatedMinutesLeft: number;
+    percentRemaining: number;
+    message: string;
+    canOneClickTopup: boolean;
+  } | null>(null);
+  const [graceCountdown, setGraceCountdown] = useState<number | null>(null);
+  const [isTopupProcessing, setIsTopupProcessing] = useState(false);
+
+  // ─── Socket.io Presence & Billing Monitoring ───────────────────────────────
   useEffect(() => {
     const socket = io(API_BASE, {
       withCredentials: true,
     });
     socketRef.current = socket;
+
+    const storedUser = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('user') || '{}');
+      } catch {
+        return {};
+      }
+    })();
+
+    if (storedUser?.id) {
+      socket.emit('register_user', storedUser.id);
+    }
 
     socket.emit('join_session', sessionId);
 
@@ -412,10 +435,54 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
       setParticipantCount(data.count);
     });
 
+    socket.on('billing:low_balance', (data) => {
+      setLowBalanceAlert(data);
+    });
+
+    socket.on('billing:grace_period', (data) => {
+      setGraceCountdown(data.secondsRemaining);
+    });
+
+    socket.on('billing:overage_charged', () => {
+      setLowBalanceAlert(null);
+      setGraceCountdown(null);
+    });
+
+    socket.on('billing:stream_ending', (data) => {
+      alert(data.message || 'This live stream has ended.');
+      onExit();
+    });
+
     return () => {
       socket.disconnect();
     };
-  }, [sessionId]);
+  }, [sessionId, onExit]);
+
+  const handleInStreamTopup = async () => {
+    setIsTopupProcessing(true);
+    try {
+      const authToken = localStorage.getItem('auth_token');
+      const res = await fetch(`${API_BASE}/api/v1/billing/one-click-topup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLowBalanceAlert(null);
+        setGraceCountdown(null);
+      } else {
+        alert(data.error || 'Failed to top up. Please check your payment method on file.');
+      }
+    } catch (err: any) {
+      console.error('In-stream topup failed:', err);
+    } finally {
+      setIsTopupProcessing(false);
+    }
+  };
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -482,6 +549,63 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
 
   return (
     <div className="room-container animate-fade-in">
+        {/* ── In-Stream Low Balance Alert Banner for Host ── */}
+        {lowBalanceAlert && !graceCountdown && (
+          <div className="in-stream-warning-banner low-balance animate-fade-in">
+            <div className="warning-content">
+              <AlertTriangle size={20} className="warning-icon" />
+              <div>
+                <strong>Low on Minutes ({lowBalanceAlert.percentRemaining}% remaining)</strong>
+                <span>
+                  {lowBalanceAlert.minutesRemaining.toLocaleString()} mins left — ~{lowBalanceAlert.estimatedMinutesLeft} mins left at current audience size
+                </span>
+              </div>
+            </div>
+            <div className="warning-actions">
+              <button
+                type="button"
+                className="instream-topup-btn"
+                onClick={handleInStreamTopup}
+                disabled={isTopupProcessing}
+              >
+                <Zap size={16} />
+                <span>{isTopupProcessing ? 'Processing...' : '1-Click Top Up ($10)'}</span>
+              </button>
+              <button
+                type="button"
+                className="close-warning-btn"
+                onClick={() => setLowBalanceAlert(null)}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Grace Period Cutoff Countdown Banner ── */}
+        {graceCountdown !== null && (
+          <div className="in-stream-warning-banner grace-period animate-fade-in">
+            <div className="warning-content">
+              <AlertCircle size={22} className="danger-icon pulse" />
+              <div>
+                <strong>Participant-Minutes Depleted — Stream Ending Soon!</strong>
+                <span>
+                  Grace period active: <strong>{graceCountdown}s</strong> remaining before stream ends gracefully.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="instream-topup-btn urgent"
+              onClick={handleInStreamTopup}
+              disabled={isTopupProcessing}
+            >
+              <Zap size={16} />
+              <span>{isTopupProcessing ? 'Processing...' : 'Top Up Now ($10)'}</span>
+            </button>
+          </div>
+        )}
+
         <div className="main-room-layout">
           <div className="video-area">
             <div className="video-grid">
@@ -974,6 +1098,110 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
           background: rgba(255, 255, 255, 0.05);
           padding: 0.2rem 0.5rem;
           border-radius: 4px;
+        }
+
+        /* ── In-Stream Billing Alert Banners ── */
+        .in-stream-warning-banner {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0.85rem 1.5rem;
+          margin: 0.75rem 1.5rem 0 1.5rem;
+          border-radius: 14px;
+          z-index: 50;
+        }
+
+        .in-stream-warning-banner.low-balance {
+          background: rgba(245, 158, 11, 0.15);
+          border: 1px solid rgba(245, 158, 11, 0.4);
+          color: #fbbf24;
+          box-shadow: 0 4px 20px rgba(245, 158, 11, 0.2);
+        }
+
+        .in-stream-warning-banner.grace-period {
+          background: rgba(239, 68, 68, 0.2);
+          border: 1px solid rgba(239, 68, 68, 0.5);
+          color: #fca5a5;
+          box-shadow: 0 4px 25px rgba(239, 68, 68, 0.35);
+        }
+
+        .warning-content {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .warning-content div {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+        }
+
+        .warning-content strong {
+          color: white;
+          font-size: 0.95rem;
+        }
+
+        .warning-content span {
+          font-size: 0.82rem;
+          opacity: 0.9;
+        }
+
+        .warning-icon {
+          color: #f59e0b;
+          flex-shrink: 0;
+        }
+
+        .danger-icon {
+          color: #ef4444;
+          flex-shrink: 0;
+        }
+
+        .warning-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .instream-topup-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding: 0.55rem 1.1rem;
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          border: none;
+          color: white;
+          border-radius: 10px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+        }
+
+        .instream-topup-btn:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 16px rgba(16, 185, 129, 0.5);
+        }
+
+        .instream-topup-btn.urgent {
+          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+          box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .instream-topup-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .close-warning-btn {
+          background: none;
+          border: none;
+          color: inherit;
+          font-size: 1.3rem;
+          cursor: pointer;
+          padding: 0.2rem 0.5rem;
+          line-height: 1;
         }
       ` }} />
     </div>

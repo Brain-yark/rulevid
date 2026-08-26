@@ -1,6 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Play, Calendar, Users, Clock, Search, Video, Copy, Check, X, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react';
+import { 
+  Plus, 
+  Play, 
+  Calendar, 
+  Users, 
+  Clock, 
+  Search, 
+  Video, 
+  Copy, 
+  Check, 
+  X, 
+  CheckCircle, 
+  AlertCircle, 
+  AlertTriangle,
+  Sparkles,
+  Zap,
+  ShieldCheck,
+  Radio
+} from 'lucide-react';
 import { API_BASE } from '../config';
+import { BillingMarketplaceModal } from '../components/BillingMarketplaceModal';
+import type { UserPackageStatus } from '../../../shared/types';
 
 interface Session {
   id: string;
@@ -34,10 +54,14 @@ const useDashToast = () => {
 
 const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
   const [balance, setBalance] = useState<number | null>(null);
+  const [packageStatus, setPackageStatus] = useState<UserPackageStatus | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [newDescription, setNewDescription] = useState('');
+  const [newDuration, setNewDuration] = useState('60');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -45,10 +69,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
 
   // Read real user info from localStorage
   const storedUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
-  const displayName = storedUser.companyName || storedUser.email?.split('@')[0] || 'Host';
+  const displayName = storedUser.companyName || storedUser.name || storedUser.email?.split('@')[0] || 'Host';
 
   useEffect(() => {
     fetchBalance();
+    fetchPackageStatus();
   }, []);
 
   useEffect(() => {
@@ -76,6 +101,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     }
   };
 
+  const fetchPackageStatus = async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/billing/packages/status`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPackageStatus(data);
+      }
+    } catch (e) {
+      console.warn('[Dashboard] Could not fetch package status');
+    }
+  };
+
   const fetchSessions = async () => {
     const token = localStorage.getItem('auth_token');
     if (!token) return;
@@ -83,7 +124,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     try {
       const query = new URLSearchParams();
       if (search) query.append('search', search);
-      if (filter) query.append('status', filter);
+      // Default to active+scheduled; only show ended when explicitly filtered
+      if (filter) {
+        query.append('status', filter);
+      } else {
+        // Show active and scheduled but not ended by default
+        query.append('excludeStatus', 'ended');
+      }
 
       const response = await fetch(`${API_BASE}/api/v1/sessions?${query}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -100,7 +147,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
+    if (!newTitle.trim()) {
+      addToast('Please enter a session title', 'warning');
+      return;
+    }
 
     const token = localStorage.getItem('auth_token');
     setIsCreating(true);
@@ -111,16 +161,31 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}` 
         },
-        body: JSON.stringify({ title: newTitle })
+        body: JSON.stringify({ 
+          title: newTitle.trim(),
+          description: newDescription.trim() || undefined
+        })
       });
       
+      const data = await response.json();
+
       if (response.ok) {
         setNewTitle('');
+        setNewDescription('');
         setIsModalOpen(false);
-        addToast('Session created successfully!', 'success');
+        addToast('Live stream session created successfully!', 'success');
         await fetchSessions();
+        if (data.session?.id) {
+          onJoinRoom(data.session.id);
+        }
       } else {
-        addToast('Failed to create session. Please try again.', 'error');
+        if (response.status === 402 || data.error?.includes('balance') || data.error?.includes('package')) {
+          addToast(data.error || 'Host package required to start sessions', 'warning');
+          setIsModalOpen(false);
+          setIsBillingModalOpen(true);
+        } else {
+          addToast(data.error || 'Failed to create session. Please try again.', 'error');
+        }
       }
     } catch (e) {
       console.error(e);
@@ -163,6 +228,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
         </button>
       </header>
 
+      {/* ── Stats Grid with Host Package Card ── */}
       <div className="stats-grid">
         <div className="stat-card glass-card">
           <div className="stat-icon"><Video size={24} /></div>
@@ -171,6 +237,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
             <span className="stat-value">{sessions.length}</span>
           </div>
         </div>
+
         <div className="stat-card glass-card">
           <div className="stat-icon"><Users size={24} /></div>
           <div className="stat-info">
@@ -178,11 +245,35 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
             <span className="stat-value">{sessions.reduce((acc, s) => acc + (s.participantCount || 0), 0)}</span>
           </div>
         </div>
+
+        <div className="stat-card glass-card clickable" onClick={() => setIsBillingModalOpen(true)}>
+          <div className="stat-icon" style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }}>
+            <Sparkles size={24} />
+          </div>
+          <div className="stat-info" style={{ flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="stat-label">Host Package</span>
+              <span style={{ fontSize: '0.75rem', color: '#818cf8', fontWeight: 600 }}>Change Tier ↗</span>
+            </div>
+            <span className="stat-value" style={{ fontSize: '1.25rem' }}>
+              {packageStatus?.package?.name || (packageStatus?.hasPackage ? 'Host Plan' : 'Free Tier')}
+            </span>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              {packageStatus?.packageMinutesRemaining !== undefined
+                ? `${packageStatus.packageMinutesRemaining.toLocaleString()} mins left`
+                : '3,000 mins included'}
+            </span>
+          </div>
+        </div>
+
         <div className="stat-card glass-card clickable" onClick={onGoToWallet}>
           <div className="stat-icon"><Clock size={24} /></div>
           <div className="stat-info">
             <span className="stat-label">Wallet Balance</span>
             <span className="stat-value">{balance !== null ? `$${balance.toFixed(2)}` : '...'}</span>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              {storedUser?.overageConsent ? 'Auto-Overage: ON' : '1-Click Top-Up'}
+            </span>
           </div>
         </div>
       </div>
@@ -282,74 +373,150 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
         </div>
       </div>
 
-      {/* ── Custom Glass Modal ── */}
+      {/* ── Complete Session Studio Modal ── */}
       {isModalOpen && (
         <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
-          <div className="modal-content glass-card" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content glass-card session-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Create New Session</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ padding: '0.5rem', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '10px', color: '#818cf8' }}>
+                  <Radio size={22} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.3rem' }}>Create Streaming Session</h3>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                    Instant ultra-low latency broadcast with live chat &amp; participant management
+                  </span>
+                </div>
+              </div>
               <button className="close-modal-btn" onClick={() => setIsModalOpen(false)}>
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleCreateSession}>
-              <div className="form-group" style={{ margin: '1.5rem 0' }}>
-                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  Session Title
-                </label>
+
+            {/* Host Package Status Banner */}
+            <div className="session-balance-banner">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <Sparkles size={16} color="#818cf8" />
+                <span>
+                  Host Plan: <strong>{packageStatus?.package?.name || 'Standard'}</strong>
+                </span>
+                <span className="balance-pill">
+                  {packageStatus?.packageMinutesRemaining !== undefined
+                    ? `${packageStatus.packageMinutesRemaining.toLocaleString()} mins available`
+                    : 'Minutes Active'}
+                </span>
+              </div>
+              <button 
+                type="button" 
+                className="upgrade-link-btn"
+                onClick={() => {
+                  setIsModalOpen(false);
+                  setIsBillingModalOpen(true);
+                }}
+              >
+                Change Package ↗
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSession} className="session-form">
+              {/* Session Title */}
+              <div className="form-group">
+                <label>Session Title *</label>
                 <input 
                   type="text" 
-                  placeholder="e.g. All-Hands Executive Briefing" 
+                  placeholder="e.g. All-Hands Executive Briefing or Masterclass" 
                   value={newTitle} 
                   onChange={(e) => setNewTitle(e.target.value)} 
                   autoFocus 
                   required
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem 1rem',
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '10px',
-                    color: 'white',
-                    outline: 'none'
-                  }}
+                  className="session-input"
                 />
               </div>
-              <div className="modal-actions" style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+
+              {/* Session Description / Agenda */}
+              <div className="form-group">
+                <label>Agenda / Description (Optional)</label>
+                <textarea 
+                  placeholder="e.g. Keynotes, interactive audience Q&amp;A, and product announcements..." 
+                  value={newDescription} 
+                  onChange={(e) => setNewDescription(e.target.value)}
+                  rows={3}
+                  className="session-textarea"
+                />
+              </div>
+
+              {/* Target Duration Selector */}
+              <div className="form-group">
+                <label>Estimated Session Duration</label>
+                <div className="duration-selector-row">
+                  {['30', '45', '60', '90', '120'].map((mins) => (
+                    <button
+                      key={mins}
+                      type="button"
+                      className={`duration-chip ${newDuration === mins ? 'active' : ''}`}
+                      onClick={() => setNewDuration(mins)}
+                    >
+                      {mins} mins
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Broadcast Features Info Grid */}
+              <div className="session-features-box">
+                <div className="session-feat-item">
+                  <Zap size={16} color="#10b981" />
+                  <span>Ultra-Low Latency RTC Video</span>
+                </div>
+                <div className="session-feat-item">
+                  <Users size={16} color="#818cf8" />
+                  <span>Real-Time Agora Chat Room</span>
+                </div>
+                <div className="session-feat-item">
+                  <ShieldCheck size={16} color="#f59e0b" />
+                  <span>Auto Low-Balance Alert Protection</span>
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
                 <button 
                   type="button" 
                   onClick={() => setIsModalOpen(false)}
-                  style={{
-                    padding: '0.75rem 1.25rem',
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '10px',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer'
-                  }}
+                  className="modal-cancel-btn"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={isCreating || !newTitle.trim()}
-                  style={{
-                    padding: '0.75rem 1.5rem',
-                    background: 'var(--primary)',
-                    border: 'none',
-                    borderRadius: '10px',
-                    color: 'white',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
+                  className="modal-submit-btn"
                 >
-                  {isCreating ? 'Creating...' : 'Launch Session'}
+                  {isCreating ? (
+                    <span>Launching Session...</span>
+                  ) : (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Play size={16} /> Launch Live Stream
+                    </span>
+                  )}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* ── Billing Marketplace Modal ── */}
+      <BillingMarketplaceModal
+        isOpen={isBillingModalOpen}
+        onClose={() => setIsBillingModalOpen(false)}
+        currentPackageSlug={packageStatus?.package?.slug}
+        onSuccess={(pkgSlug) => {
+          addToast(`Package upgraded to ${pkgSlug.toUpperCase()}!`, 'success');
+          fetchPackageStatus();
+          fetchBalance();
+        }}
+      />
 
       <style>{`
         .toast-container {
@@ -718,6 +885,177 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
         .close-modal-btn:hover {
           color: white;
           background: rgba(255, 255, 255, 0.1);
+        }
+
+        .session-modal-card {
+          max-width: 560px;
+          background: #131722;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .session-balance-banner {
+          margin-top: 1rem;
+          margin-bottom: 1.25rem;
+          padding: 0.75rem 1rem;
+          background: rgba(99, 102, 241, 0.1);
+          border: 1px solid rgba(99, 102, 241, 0.25);
+          border-radius: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 0.86rem;
+        }
+
+        .balance-pill {
+          padding: 0.2rem 0.6rem;
+          background: rgba(16, 185, 129, 0.2);
+          border: 1px solid rgba(16, 185, 129, 0.4);
+          color: #6ee7b7;
+          border-radius: 20px;
+          font-size: 0.75rem;
+          font-weight: 600;
+        }
+
+        .upgrade-link-btn {
+          background: none;
+          border: none;
+          color: #818cf8;
+          font-weight: 600;
+          font-size: 0.8rem;
+          cursor: pointer;
+          padding: 0;
+          transition: var(--transition-fast);
+        }
+
+        .upgrade-link-btn:hover {
+          color: #a5b4fc;
+          text-decoration: underline;
+        }
+
+        .session-form {
+          display: flex;
+          flex-direction: column;
+          gap: 1.1rem;
+        }
+
+        .session-form .form-group {
+          display: flex;
+          flex-direction: column;
+          gap: 0.4rem;
+        }
+
+        .session-form label {
+          font-size: 0.88rem;
+          font-weight: 600;
+          color: rgba(255, 255, 255, 0.85);
+        }
+
+        .session-input, .session-textarea {
+          width: 100%;
+          padding: 0.8rem 1rem;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--glass-border);
+          border-radius: 10px;
+          color: white;
+          font-family: inherit;
+          font-size: 0.95rem;
+          outline: none;
+          transition: var(--transition-fast);
+        }
+
+        .session-input:focus, .session-textarea:focus {
+          border-color: var(--primary);
+          background: rgba(255, 255, 255, 0.08);
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+        }
+
+        .session-textarea {
+          resize: vertical;
+          min-height: 75px;
+        }
+
+        .duration-selector-row {
+          display: flex;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+
+        .duration-chip {
+          padding: 0.45rem 0.9rem;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--glass-border);
+          border-radius: 8px;
+          color: var(--text-muted);
+          font-size: 0.82rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: var(--transition-fast);
+        }
+
+        .duration-chip:hover {
+          background: rgba(255, 255, 255, 0.1);
+          color: white;
+        }
+
+        .duration-chip.active {
+          background: rgba(99, 102, 241, 0.25);
+          border-color: #818cf8;
+          color: white;
+        }
+
+        .session-features-box {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 0.5rem;
+          padding: 0.85rem;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          border-radius: 12px;
+        }
+
+        .session-feat-item {
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+          font-size: 0.82rem;
+          color: rgba(255, 255, 255, 0.75);
+        }
+
+        .modal-cancel-btn {
+          padding: 0.75rem 1.25rem;
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid var(--glass-border);
+          border-radius: 10px;
+          color: var(--text-muted);
+          font-weight: 600;
+          cursor: pointer;
+          transition: var(--transition-fast);
+        }
+
+        .modal-cancel-btn:hover {
+          background: rgba(255, 255, 255, 0.1);
+          color: white;
+        }
+
+        .modal-submit-btn {
+          padding: 0.75rem 1.5rem;
+          background: var(--primary);
+          border: none;
+          border-radius: 10px;
+          color: white;
+          font-weight: 600;
+          cursor: pointer;
+          transition: var(--transition-fast);
+        }
+
+        .modal-submit-btn:hover:not(:disabled) {
+          background: var(--primary-hover);
+          transform: translateY(-1px);
+        }
+
+        .modal-submit-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
 
         @keyframes pulse {

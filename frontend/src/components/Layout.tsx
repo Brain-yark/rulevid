@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { LogOut, LayoutDashboard, Wallet as WalletIcon, Ticket, ShieldAlert, TrendingUp, Radio } from 'lucide-react';
+import { LogOut, LayoutDashboard, Wallet as WalletIcon, Ticket, ShieldAlert, TrendingUp, Radio, Sparkles } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
+import { BillingMarketplaceModal } from './BillingMarketplaceModal';
 import type { UserRole } from '../../../shared/types';
 
 interface LayoutUser {
@@ -9,6 +10,8 @@ interface LayoutUser {
   name?: string;
   avatarUrl?: string;
   role?: UserRole;
+  billingPackageId?: string;
+  packageMinutesTotal?: number;
 }
 
 interface LayoutProps {
@@ -21,6 +24,7 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate, children }) => {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showBillingModal, setShowBillingModal] = useState(false);
   const role = user?.role || 'user';
   const isHost = role === 'host' || role === 'admin' || role === 'moderator' || role === 'super_admin';
   const isAdmin = role === 'admin' || role === 'super_admin';
@@ -51,6 +55,17 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
               <Ticket size={18} />
               <span>Browse Events</span>
             </button>
+
+            {!isHost && (
+              <button
+                onClick={() => setShowBillingModal(true)}
+                className="nav-link nav-upgrade-btn"
+                title="Choose a Host billing package to create and monetize live experiences"
+              >
+                <Sparkles size={18} className="text-primary" />
+                <span>Host an Event</span>
+              </button>
+            )}
 
             {isHost && (
               <button
@@ -87,7 +102,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
               className={`nav-link ${currentPage === 'wallet' ? 'active' : ''}`}
             >
               <WalletIcon size={18} />
-              <span>Wallet</span>
+              <span>Billing &amp; Wallet</span>
             </button>
           </div>
 
@@ -144,6 +159,17 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
         iconType="logout"
         onConfirm={handleConfirmLogout}
         onCancel={() => setShowLogoutConfirm(false)}
+      />
+
+      <BillingMarketplaceModal
+        isOpen={showBillingModal}
+        onClose={() => setShowBillingModal(false)}
+        onSuccess={() => {
+          setShowBillingModal(false);
+          onNavigate('dashboard');
+        }}
+        title="Upgrade to Host: Choose Your Billing Tier"
+        subtitle="Select a participant-minute plan to start hosting, scheduling, and monetizing your events on RuleVid."
       />
 
       <style>{`

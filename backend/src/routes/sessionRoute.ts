@@ -3,7 +3,7 @@ import { createSession, getSessions, joinSession, endSession, refreshToken } fro
 import { requireAuth } from '../middleware/authMiddleware';
 import { checkBalance } from '../middleware/balanceCheck';
 import { validateRequest } from '../middleware/validateRequest';
-import { createSessionSchema } from '../../../shared/schemas';
+import { createSessionSchema } from '@shared/schemas';
 
 const router = Router();
 

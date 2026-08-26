@@ -14,7 +14,7 @@ import {
 } from '../controllers/eventController';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 import { validateRequest } from '../middleware/validateRequest';
-import { createEventSchema, updateEventSchema } from '../../../shared/schemas';
+import { createEventSchema, updateEventSchema } from '@shared/schemas';
 
 const router = Router();
 

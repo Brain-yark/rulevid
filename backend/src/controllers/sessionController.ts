@@ -66,12 +66,17 @@ export const createSession = async (req: Request, res: Response) => {
 export const getSessions = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.userId;
-    const { search, status } = req.query;
+    const { search, status, excludeStatus } = req.query;
 
     const sessions = await prisma.session.findMany({
       where: {
         facilitatorId: userId,
-        status: status ? (status as string) : undefined,
+        // If a specific status filter is requested, use it; otherwise exclude the specified status
+        status: status
+          ? (status as string)
+          : excludeStatus
+            ? { not: excludeStatus as string }
+            : undefined,
         title: search ? { contains: search as string, mode: 'insensitive' } : undefined,
       },
       orderBy: { createdAt: 'desc' },
@@ -197,7 +202,8 @@ export const endSession = async (req: Request, res: Response) => {
     const endedAt = new Date();
     const startedAt = session.startedAt || session.createdAt;
     const durationMs = endedAt.getTime() - startedAt.getTime();
-    const totalMinutes = Math.ceil(durationMs / 60000);
+    // Use Math.round so analytics totalMinutes matches billing deduction math
+    const totalMinutes = Math.round(durationMs / 60000);
 
     const updatedSession = await prisma.session.update({
       where: { id: id as string },

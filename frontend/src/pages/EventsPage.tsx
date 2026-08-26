@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { Event } from '../../../shared/types';
 import { API_BASE } from '../config';
+import { BillingMarketplaceModal } from '../components/BillingMarketplaceModal';
 
 interface EventsPageProps {
   onJoinEvent: (eventId: string) => void;
@@ -61,6 +62,7 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
     return hostRoles.includes(role) ? 'all' : 'upcoming';
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const { toasts, addToast, removeToast } = useToast();
 
@@ -77,6 +79,25 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
   const [newCapacity, setNewCapacity] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+
+  const handleHostEventClick = () => {
+    const hasPackage = Boolean(storedUser?.billingPackageId || (storedUser?.packageMinutesTotal && storedUser.packageMinutesTotal > 0));
+    if (!isHost || !hasPackage) {
+      setIsBillingModalOpen(true);
+    } else {
+      setEditingEventId(null);
+      resetForm();
+      setIsModalOpen(true);
+    }
+  };
+
+  const handleBillingSuccess = (packageSlug: string) => {
+    addToast(`Activated ${packageSlug.toUpperCase()} host tier! Opening Event Studio...`, 'success');
+    setIsBillingModalOpen(false);
+    setEditingEventId(null);
+    resetForm();
+    setIsModalOpen(true);
+  };
 
   useEffect(() => {
     fetchEvents();
@@ -343,7 +364,7 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
               : 'Browse scheduled sessions, reserve access tickets, and join interactive live video events.'}
           </p>
         </div>
-        <button className="primary-btn pulse-on-hover" onClick={() => { setEditingEventId(null); resetForm(); setIsModalOpen(true); }}>
+        <button className="primary-btn pulse-on-hover" onClick={handleHostEventClick}>
           <Plus size={18} />
           <span>{isHost ? 'Create Event' : 'Host an Event'}</span>
         </button>
@@ -810,6 +831,15 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
           </div>
         </div>
       )}
+
+      {/* Billing Package Selection Modal for Attendees / Hosts without package */}
+      <BillingMarketplaceModal
+        isOpen={isBillingModalOpen}
+        onClose={() => setIsBillingModalOpen(false)}
+        onSuccess={handleBillingSuccess}
+        title="Choose a Host Package to Create Events"
+        subtitle="Select a participant-minute plan to host and monetize live sessions on RuleVid. Free tier is available!"
+      />
 
       {/* Styled JSX */}
       <style>{`

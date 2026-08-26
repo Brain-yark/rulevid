@@ -93,12 +93,12 @@ class UsageSyncJob {
           `${billableMinutes} mins @ $${rate}/min = $${cost}`
         );
 
-        // 1. Send usage event to Lago (deduct credits)
+        // 1. Deduct package participant-minutes
         const deductResult = await billingService.deductMinutes(
           session.facilitatorId,
           billableMinutes
         );
-        console.log(`[UsageSync] Lago deduction status: ${deductResult.status}`);
+        console.log(`[UsageSync] Package deduction: ${billableMinutes} mins deducted, ${deductResult.remaining} mins remaining`);
 
         // 2. Fetch real post-deduction balance for accurate Transaction record
         let balanceAfter = 0;
@@ -129,7 +129,7 @@ class UsageSyncJob {
             currency: 'USD',
             balanceAfter,
             description: `Usage deduction for session: "${session.title}" (${billableMinutes} min)`,
-            status: deductResult.status === 'failed' ? 'failed' : 'completed',
+            status: 'completed',
             userId: session.facilitatorId,
           },
         });

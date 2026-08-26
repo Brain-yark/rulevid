@@ -7,17 +7,19 @@ export const validateRequest = (schema: any) => {
       await schema.parseAsync(req.body);
       next();
     } catch (error) {
-      if (error instanceof ZodError) {
+      if (error instanceof ZodError || (error as any)?.name === 'ZodError' || Array.isArray((error as any)?.issues) || Array.isArray((error as any)?.errors)) {
+        const issues = (error as any).issues || (error as any).errors || [];
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(err => ({
-            path: err.path.join('.'),
+          details: issues.map((err: any) => ({
+            path: Array.isArray(err.path) ? err.path.join('.') : String(err.path || ''),
             message: err.message
           }))
         });
         return;
       }
-      res.status(500).json({ error: 'Internal server error during validation' });
+      console.error('[validateRequest] Unexpected error:', error);
+      res.status(500).json({ error: 'Internal server error during validation', message: (error as any)?.message });
       return;
     }
   };

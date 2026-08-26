@@ -11,10 +11,11 @@
     "declaration": true,
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
+    "types": ["node"],
     "paths": {
       "@shared/*": ["../shared/*"]
     }
   },
-  "include": ["src/**/*", "../shared/**/*"],
+  "include": ["src/**/*", "../shared/**/*", "seed.ts", "scripts/**/*"],
   "exclude": ["node_modules", "**/*.spec.ts"]
 }

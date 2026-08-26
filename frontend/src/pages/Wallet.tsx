@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  CreditCard,
   ArrowUpRight,
   ArrowDownLeft,
   History,
@@ -10,8 +9,14 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
+  Clock,
+  Sparkles,
+  Zap,
 } from 'lucide-react';
 import { API_BASE } from '../config';
+import { useToast } from '../context/ToastContext';
+import { BillingMarketplaceModal } from '../components/BillingMarketplaceModal';
+import type { UserPackageStatus } from '../../../shared/types';
 
 interface WalletProps {
   onBack: () => void;
@@ -31,14 +36,14 @@ interface Transaction {
 const WALLET_API = `${API_BASE}/api/v1`;
 
 const Wallet: React.FC<WalletProps> = () => {
-  const [balance, setBalance] = useState(0);
-  const [pricingTier, setPricingTier] = useState<'standard' | 'premium'>('standard');
-  const [isLoadingBalance, setIsLoadingBalance] = useState(true);
+  const toast = useToast();
+  const [packageStatus, setPackageStatus] = useState<UserPackageStatus | null>(null);
+  const [isLoadingPackage, setIsLoadingPackage] = useState(true);
   const [isLoadingTx, setIsLoadingTx] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [isTopupModalOpen, setIsTopupModalOpen] = useState(false);
-  const [topupAmount, setTopupAmount] = useState('100');
+  const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isTogglingOverage, setIsTogglingOverage] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const getAuthHeader = () => {
@@ -46,22 +51,20 @@ const Wallet: React.FC<WalletProps> = () => {
     return { Authorization: `Bearer ${token}` };
   };
 
-  const fetchBalance = React.useCallback(async () => {
-    setIsLoadingBalance(true);
+  const fetchPackageStatus = React.useCallback(async () => {
+    setIsLoadingPackage(true);
     try {
-      const res = await fetch(`${WALLET_API}/billing/balance`, {
+      const res = await fetch(`${WALLET_API}/billing/packages/status`, {
         headers: getAuthHeader(),
       });
       const data = await res.json();
       if (res.ok) {
-        setBalance(data.balance ?? 0);
-      } else {
-        setBalance(0);
+        setPackageStatus(data);
       }
     } catch (e) {
-      setBalance(0);
+      console.error('[Wallet] Failed to fetch package status:', e);
     } finally {
-      setIsLoadingBalance(false);
+      setIsLoadingPackage(false);
     }
   }, []);
 
@@ -85,50 +88,98 @@ const Wallet: React.FC<WalletProps> = () => {
   }, []);
 
   useEffect(() => {
-    // Read user's pricing tier from localStorage
-    try {
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        const user = JSON.parse(userData);
-        if (user.pricingTier === 'premium') setPricingTier('premium');
-      }
-    } catch (e) {
-      console.error('[Wallet] Failed to parse user data:', e);
-    }
 
-    // Check for Stripe redirect results (show inline banner, not alert)
     const params = new URLSearchParams(window.location.search);
-    if (params.get('success')) {
-      setBanner({ type: 'success', message: 'Payment successful! Your credits have been added.' });
+    const isSuccess = params.get('success');
+    const sessionId = params.get('session_id');
+
+    if (isSuccess && sessionId) {
+      // Verify payment with Stripe backend
+      fetch(`${WALLET_API}/billing/verify-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify({ sessionId }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.paid) {
+            setBanner({ type: 'success', message: data.message || 'Payment verified! Host package activated.' });
+            if (data.user) {
+              const currentStored = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
+              localStorage.setItem('user', JSON.stringify({ ...currentStored, ...data.user, role: 'host' }));
+            }
+            fetchPackageStatus();
+            fetchTransactions();
+          } else {
+            setBanner({ type: 'error', message: data.error || 'Payment was not successful. No minutes or services have been granted.' });
+          }
+        })
+        .catch(() => {
+          setBanner({ type: 'error', message: 'Payment verification failed. Please contact support if your card was charged.' });
+        });
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (params.get('success')) {
+      setBanner({ type: 'success', message: 'Payment successful! Your host package/credits have been activated.' });
       window.history.replaceState({}, '', window.location.pathname);
     } else if (params.get('canceled')) {
-      setBanner({ type: 'error', message: 'Payment was canceled. No charges were made.' });
+      setBanner({ type: 'error', message: 'Checkout was canceled. No charges were made and no host minutes were granted.' });
       window.history.replaceState({}, '', window.location.pathname);
     }
 
-    fetchBalance();
+    fetchPackageStatus();
     fetchTransactions();
-  }, [fetchBalance, fetchTransactions]);
+  }, [fetchPackageStatus, fetchTransactions]);
 
-  const handleTopup = async () => {
+  const handleOneClickTopup = async () => {
     setIsProcessing(true);
     try {
-      const res = await fetch(`${WALLET_API}/billing/topup`, {
+      const res = await fetch(`${WALLET_API}/billing/one-click-topup`, {
         method: 'POST',
         headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: parseFloat(topupAmount) }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
-      if (data.checkout_url) {
-        window.location.href = data.checkout_url;
+      if (res.ok) {
+        toast.success('1-Click Top-Up Succeeded!', data.message);
+        fetchPackageStatus();
+        fetchTransactions();
       } else {
-        setBanner({ type: 'error', message: data.error || 'Failed to initiate payment.' });
-        setIsProcessing(false);
+        toast.error('Top-Up Failed', data.error || 'Please add a payment method in your billing portal.');
       }
-    } catch (e) {
-      console.error('[Wallet] Topup failed:', e);
-      setBanner({ type: 'error', message: 'Network error. Please try again.' });
+    } catch (e: any) {
+      toast.error('Network Error', e.message);
+    } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleToggleOverageConsent = async () => {
+    if (!packageStatus) return;
+    setIsTogglingOverage(true);
+    const nextConsent = !packageStatus.overageConsent;
+    try {
+      const res = await fetch(`${WALLET_API}/billing/overage-consent`, {
+        method: 'POST',
+        headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consent: nextConsent }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPackageStatus((prev) => prev ? { ...prev, overageConsent: nextConsent } : null);
+        toast.success(
+          nextConsent ? 'Auto-Overage Enabled' : 'Auto-Overage Disabled',
+          data.message
+        );
+      } else {
+        toast.error('Update Failed', data.error);
+      }
+    } catch (e: any) {
+      toast.error('Error', e.message);
+    } finally {
+      setIsTogglingOverage(false);
     }
   };
 
@@ -144,7 +195,7 @@ const Wallet: React.FC<WalletProps> = () => {
       } else {
         setBanner({ 
           type: 'error', 
-          message: data.error || 'Failed to open billing portal. Have you completed a top-up yet?' 
+          message: data.error || 'Failed to open billing portal. Have you saved a payment method yet?' 
         });
         setIsProcessing(false);
       }
@@ -154,10 +205,6 @@ const Wallet: React.FC<WalletProps> = () => {
       setIsProcessing(false);
     }
   };
-
-  // Estimated minutes remaining based on real balance & tier rate
-  const ratePerMinute = pricingTier === 'premium' ? 0.004 : 0.003;
-  const estimatedMinutes = balance > 0 ? Math.floor(balance / ratePerMinute) : 0;
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -175,44 +222,115 @@ const Wallet: React.FC<WalletProps> = () => {
 
       <header className="wallet-header">
         <div>
-          <h1>Wallet &amp; Billing</h1>
-          <p className="subtitle">Manage your pre-paid credits and view usage history</p>
+          <h1>Billing &amp; Host Packages</h1>
+          <p className="subtitle">Manage your participant-minute package, 1-click top-ups, and auto-overage protection</p>
         </div>
         <div className="header-actions">
-          <button className="refresh-btn" onClick={() => { fetchBalance(); fetchTransactions(); }} title="Refresh">
+          <button className="refresh-btn" onClick={() => { fetchPackageStatus(); fetchTransactions(); }} title="Refresh">
             <RefreshCw size={16} />
           </button>
-          <button className="topup-btn" onClick={() => setIsTopupModalOpen(true)}>
-            <DollarSign size={20} /> Add Credits
+          <button className="marketplace-btn" onClick={() => setIsMarketplaceOpen(true)}>
+            <Sparkles size={18} /> View Package Marketplace
           </button>
         </div>
       </header>
 
+      {/* ── Main Billing Grid ── */}
       <div className="wallet-grid">
-        {/* ── Balance Card ── */}
-        <div className="balance-card glass-card">
-          <div className="balance-content">
-            <span className="label">Current Balance</span>
-            <span className="amount">
-              {isLoadingBalance ? '...' : `$${balance.toFixed(2)}`}
+        {/* ── Host Participant-Minutes Package Card ── */}
+        <div className="package-status-card glass-card">
+          <div className="pkg-status-top">
+            <div className="pkg-title-badge">
+              <Clock size={18} />
+              <span>Host Participant-Minutes</span>
+            </div>
+            <span className="pkg-pill-name">
+              {isLoadingPackage ? '...' : packageStatus?.package ? `${packageStatus.package.name.toUpperCase()} PLAN` : 'NO PLAN ACTIVE'}
             </span>
-            <div className="balance-footer">
-              <span className="estimate">
-                ≈ {estimatedMinutes.toLocaleString()} minutes at ${ratePerMinute}/min
-                <span className="tier-badge">{pricingTier}</span>
+          </div>
+
+          <div className="pkg-gauge-section">
+            <div className="pkg-numbers-row">
+              <div>
+                <span className="pkg-remaining-val">
+                  {isLoadingPackage ? '...' : (packageStatus?.packageMinutesRemaining || 0).toLocaleString()}
+                </span>
+                <span className="pkg-total-sub">
+                  / {(packageStatus?.packageMinutesTotal || 0).toLocaleString()} minutes remaining
+                </span>
+              </div>
+              <span className={`pkg-percent-tag ${packageStatus?.isLowBalance ? 'low' : packageStatus?.isDepleted ? 'depleted' : 'healthy'}`}>
+                {isLoadingPackage ? '...' : `${packageStatus?.percentRemaining || 0}%`}
+              </span>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="progress-track">
+              <div
+                className={`progress-fill ${packageStatus?.isLowBalance ? 'low' : packageStatus?.isDepleted ? 'depleted' : 'healthy'}`}
+                style={{ width: `${Math.min(100, Math.max(0, packageStatus?.percentRemaining || 0))}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="pkg-details-grid">
+            <div className="pkg-stat-box">
+              <span className="stat-label">Consumed this cycle</span>
+              <span className="stat-val">{(packageStatus?.packageMinutesUsed || 0).toLocaleString()} mins</span>
+            </div>
+            <div className="pkg-stat-box">
+              <span className="stat-label">Monthly Cycle Reset</span>
+              <span className="stat-val">
+                {packageStatus?.daysUntilReset !== null ? `In ${packageStatus?.daysUntilReset} days` : '30-day rollover'}
               </span>
             </div>
           </div>
-          <div className="card-decoration">
-            <CreditCard size={120} />
+
+          {/* Overage Toggle Box */}
+          <div className="overage-protection-toggle-card">
+            <div className="overage-text-col">
+              <div className="overage-title-row">
+                <Zap size={16} className="text-amber" />
+                <strong>Auto $10 Overage Protection</strong>
+              </div>
+              <span className="overage-desc">
+                When balance hits zero during a live session, automatically charge a $10 block (+10,000 mins) so your stream never drops.
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className={`toggle-switch-btn ${packageStatus?.overageConsent ? 'on' : 'off'}`}
+              onClick={handleToggleOverageConsent}
+              disabled={isTogglingOverage}
+            >
+              <div className="toggle-handle" />
+            </button>
+          </div>
+
+          <div className="pkg-card-actions">
+            <button className="upgrade-tier-btn" onClick={() => setIsMarketplaceOpen(true)}>
+              <Sparkles size={16} />
+              <span>Change / Upgrade Plan</span>
+            </button>
+            <button
+              className="oneclick-topup-btn"
+              onClick={handleOneClickTopup}
+              disabled={isProcessing}
+            >
+              <DollarSign size={16} />
+              <span>1-Click $10 Top Up</span>
+            </button>
           </div>
         </div>
 
-        {/* ── Security Card ── */}
+        {/* ── Security & Stripe Card ── */}
         <div className="security-card glass">
           <Shield size={32} className="shield-icon" />
-          <h3>Secure Payments</h3>
-          <p>All transactions are processed via Stripe with 256-bit encryption. Your card details are never stored on our servers.</p>
+          <h3>Stripe Billing Portal</h3>
+          <p>
+            Securely manage your pre-saved cards for 1-click in-stream top-ups and automatic overage protection.
+          </p>
           <button
             className="manage-stripe-btn"
             onClick={handleManageBilling}
@@ -227,7 +345,7 @@ const Wallet: React.FC<WalletProps> = () => {
       <div className="history-section">
         <div className="section-header">
           <History size={20} />
-          <h2>Transaction History</h2>
+          <h2>Billing &amp; Usage History</h2>
           {!isLoadingTx && <span className="tx-count">{transactions.length} records</span>}
         </div>
 
@@ -235,10 +353,10 @@ const Wallet: React.FC<WalletProps> = () => {
           {isLoadingTx ? (
             <div className="tx-loading">Loading transactions...</div>
           ) : transactions.length === 0 ? (
-            <div className="tx-empty">No transactions yet. Top up your wallet to get started.</div>
+            <div className="tx-empty">No transactions recorded yet. Select a host package to get started.</div>
           ) : (
             transactions.map((tx) => {
-              const isTopup = tx.type === 'topup';
+              const isTopup = tx.type === 'topup' || tx.type === 'package_subscription';
               return (
                 <div key={tx.id} className="transaction-item glass">
                   <div className="tx-icon-bg">
@@ -248,19 +366,18 @@ const Wallet: React.FC<WalletProps> = () => {
                     }
                   </div>
                   <div className="tx-details">
-                    <span className="tx-type">{isTopup ? 'Top-up' : 'Usage Deduction'}</span>
+                    <span className="tx-type">
+                      {tx.type === 'package_subscription' ? 'Package Subscription' : tx.type === 'overage_charge' ? 'Auto Overage ($10 Block)' : tx.type === 'topup' ? 'Top-up' : 'Usage Deduction'}
+                    </span>
                     <span className="tx-desc">{tx.description || '—'}</span>
                     <span className="tx-date">{formatDate(tx.createdAt)}</span>
                   </div>
                   <div className="tx-balance-after">
-                    <span className="balance-label">Balance after</span>
-                    <span className="balance-value">${tx.balanceAfter.toFixed(2)}</span>
+                    <span className="balance-label">Participant Mins</span>
+                    <span className="balance-value">{tx.balanceAfter.toLocaleString()}</span>
                   </div>
                   <div className="tx-status">
                     <span className={`status-pill ${tx.status}`}>{tx.status}</span>
-                  </div>
-                  <div className={`tx-amount ${tx.amount >= 0 ? 'positive' : 'negative'}`}>
-                    {tx.amount >= 0 ? '+' : ''}{tx.amount.toFixed(2)} {tx.currency}
                   </div>
                 </div>
               );
@@ -269,53 +386,23 @@ const Wallet: React.FC<WalletProps> = () => {
         </div>
       </div>
 
-      {/* ── Top-up Modal ── */}
-      {isTopupModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content glass-card animate-fade-in">
-            <h2>Add Credits</h2>
-            <p>Choose an amount to add to your RuleVid wallet.</p>
-
-            <div className="amount-options">
-              {['25', '50', '100', '250'].map((amt) => (
-                <button
-                  key={amt}
-                  className={`amount-opt ${topupAmount === amt ? 'selected' : ''}`}
-                  onClick={() => setTopupAmount(amt)}
-                >
-                  ${amt}
-                  <span className="amount-opt-minutes">
-                    ≈ {Math.floor(parseFloat(amt) / ratePerMinute).toLocaleString()} min
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div className="modal-actions">
-              <button
-                className="cancel-btn"
-                onClick={() => !isProcessing && setIsTopupModalOpen(false)}
-                disabled={isProcessing}
-              >
-                Cancel
-              </button>
-              <button
-                className="confirm-topup-btn"
-                onClick={handleTopup}
-                disabled={isProcessing}
-              >
-                {isProcessing ? 'Connecting to Stripe...' : `Pay $${topupAmount}.00`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Billing Marketplace Plan Selector Modal */}
+      <BillingMarketplaceModal
+        isOpen={isMarketplaceOpen}
+        onClose={() => setIsMarketplaceOpen(false)}
+        onSuccess={() => {
+          fetchPackageStatus();
+          fetchTransactions();
+        }}
+        currentPackageSlug={packageStatus?.package?.slug}
+        title="Host Billing Marketplace"
+        subtitle="Upgrade or change your monthly participant-minute plan anytime. Instant 1-click activation."
+      />
 
       <style>{`
         .wallet-page {
-          display: flex;
-          flex-direction: column;
-          gap: 2.5rem;
+          max-width: 1100px;
+          margin: 0 auto;
         }
 
         .wallet-banner {
@@ -323,36 +410,50 @@ const Wallet: React.FC<WalletProps> = () => {
           align-items: center;
           gap: 0.75rem;
           padding: 1rem 1.5rem;
-          border-radius: 12px;
+          border-radius: 14px;
+          margin-bottom: 2rem;
           font-weight: 500;
           position: relative;
         }
+
         .wallet-banner.success {
-          background: rgba(16, 185, 129, 0.12);
-          border: 1px solid rgba(16, 185, 129, 0.3);
-          color: #10b981;
+          background: rgba(16, 185, 129, 0.15);
+          border: 1px solid rgba(16, 185, 129, 0.35);
+          color: #6ee7b7;
         }
+
         .wallet-banner.error {
-          background: rgba(244, 63, 94, 0.1);
-          border: 1px solid rgba(244, 63, 94, 0.25);
-          color: #f43f5e;
+          background: rgba(244, 63, 94, 0.15);
+          border: 1px solid rgba(244, 63, 94, 0.35);
+          color: #fda4af;
         }
+
         .banner-close {
-          margin-left: auto;
+          position: absolute;
+          right: 1rem;
           background: none;
           border: none;
           color: inherit;
-          font-size: 1.4rem;
+          font-size: 1.25rem;
           cursor: pointer;
-          line-height: 1;
-          opacity: 0.7;
         }
-        .banner-close:hover { opacity: 1; }
 
         .wallet-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          margin-bottom: 2.5rem;
+        }
+
+        .wallet-header h1 {
+          font-size: 2.2rem;
+          font-weight: 800;
+          margin-bottom: 0.25rem;
+        }
+
+        .subtitle {
+          color: var(--text-muted);
+          font-size: 0.95rem;
         }
 
         .header-actions {
@@ -362,248 +463,470 @@ const Wallet: React.FC<WalletProps> = () => {
         }
 
         .refresh-btn {
-          background: rgba(255,255,255,0.06);
+          width: 42px;
+          height: 42px;
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.04);
           border: 1px solid var(--glass-border);
           color: var(--text-muted);
-          padding: 0.6rem;
-          border-radius: 10px;
-          cursor: pointer;
           display: flex;
           align-items: center;
-          transition: var(--transition-fast);
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.2s ease;
         }
-        .refresh-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.1); }
 
-        .topup-btn {
+        .refresh-btn:hover {
+          color: white;
+          background: rgba(255, 255, 255, 0.08);
+        }
+
+        .marketplace-btn {
           display: flex;
           align-items: center;
           gap: 0.5rem;
-          background: var(--primary);
-          color: white;
+          padding: 0.65rem 1.25rem;
+          background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
           border: none;
-          padding: 0.75rem 1.5rem;
+          color: white;
           border-radius: 12px;
-          font-weight: 600;
+          font-weight: 700;
+          font-size: 0.9rem;
           cursor: pointer;
-          transition: var(--transition-fast);
+          transition: all 0.2s ease;
+          box-shadow: 0 4px 15px rgba(99, 102, 241, 0.35);
         }
-        .topup-btn:hover { background: var(--primary-hover); }
+
+        .marketplace-btn:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+        }
 
         .wallet-grid {
           display: grid;
-          grid-template-columns: 2fr 1fr;
-          gap: 2rem;
+          grid-template-columns: 1.8fr 1fr;
+          gap: 1.5rem;
+          margin-bottom: 3rem;
         }
 
-        .balance-card {
-          padding: 2.5rem;
-          position: relative;
-          overflow: hidden;
-          background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(244, 63, 94, 0.1));
+        .package-status-card {
+          padding: 2rem;
+          border-radius: 20px;
+          background: linear-gradient(180deg, rgba(26, 28, 48, 0.85) 0%, rgba(15, 17, 30, 0.95) 100%);
+          border: 1px solid rgba(99, 102, 241, 0.25);
         }
 
-        .balance-content { position: relative; z-index: 1; }
-        .balance-content .label { display: block; color: var(--text-muted); margin-bottom: 0.5rem; }
-        .balance-content .amount { font-size: 3.5rem; font-weight: 800; display: block; }
+        .pkg-status-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1.5rem;
+        }
 
-        .balance-footer { margin-top: 1.5rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-
-        .estimate {
-          background: rgba(255, 255, 255, 0.05);
-          padding: 0.4rem 0.8rem;
-          border-radius: 8px;
-          font-size: 0.9rem;
-          color: var(--text-muted);
+        .pkg-title-badge {
           display: flex;
           align-items: center;
           gap: 0.5rem;
-        }
-
-        .tier-badge {
-          background: rgba(99, 102, 241, 0.2);
-          color: var(--primary);
-          padding: 0.1rem 0.5rem;
-          border-radius: 20px;
-          font-size: 0.75rem;
+          color: #a5b4fc;
           font-weight: 600;
-          text-transform: capitalize;
+          font-size: 0.9rem;
         }
 
-        .card-decoration {
-          position: absolute;
-          right: -20px;
-          bottom: -20px;
-          color: rgba(255, 255, 255, 0.03);
-          transform: rotate(-15deg);
+        .pkg-pill-name {
+          padding: 0.25rem 0.75rem;
+          background: rgba(99, 102, 241, 0.2);
+          border: 1px solid rgba(99, 102, 241, 0.4);
+          color: #c7d2fe;
+          border-radius: 12px;
+          font-size: 0.75rem;
+          font-weight: 800;
+          letter-spacing: 0.05em;
+        }
+
+        .pkg-gauge-section {
+          margin-bottom: 1.5rem;
+        }
+
+        .pkg-numbers-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          margin-bottom: 0.6rem;
+        }
+
+        .pkg-remaining-val {
+          font-size: 2.2rem;
+          font-weight: 800;
+          color: white;
+          margin-right: 0.4rem;
+        }
+
+        .pkg-total-sub {
+          color: var(--text-muted);
+          font-size: 0.9rem;
+        }
+
+        .pkg-percent-tag {
+          font-size: 0.95rem;
+          font-weight: 800;
+          padding: 0.2rem 0.6rem;
+          border-radius: 8px;
+        }
+
+        .pkg-percent-tag.healthy {
+          background: rgba(16, 185, 129, 0.15);
+          color: #6ee7b7;
+        }
+
+        .pkg-percent-tag.low {
+          background: rgba(245, 158, 11, 0.2);
+          color: #fbbf24;
+        }
+
+        .pkg-percent-tag.depleted {
+          background: rgba(239, 68, 68, 0.2);
+          color: #f87171;
+        }
+
+        .progress-track {
+          width: 100%;
+          height: 10px;
+          background: rgba(255, 255, 255, 0.08);
+          border-radius: 6px;
+          overflow: hidden;
+        }
+
+        .progress-fill {
+          height: 100%;
+          transition: width 0.5s ease;
+        }
+
+        .progress-fill.healthy {
+          background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+        }
+
+        .progress-fill.low {
+          background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+        }
+
+        .progress-fill.depleted {
+          background: #ef4444;
+        }
+
+        .pkg-details-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+          margin-bottom: 1.5rem;
+        }
+
+        .pkg-stat-box {
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid var(--glass-border);
+          border-radius: 12px;
+          padding: 0.85rem 1rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.2rem;
+        }
+
+        .stat-label {
+          font-size: 0.78rem;
+          color: var(--text-muted);
+        }
+
+        .stat-val {
+          font-size: 0.95rem;
+          font-weight: 700;
+          color: white;
+        }
+
+        .overage-protection-toggle-card {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 1rem 1.25rem;
+          background: rgba(99, 102, 241, 0.08);
+          border: 1px solid rgba(99, 102, 241, 0.25);
+          border-radius: 14px;
+          margin-bottom: 1.5rem;
+        }
+
+        .overage-text-col {
+          display: flex;
+          flex-direction: column;
+          gap: 0.2rem;
+          max-width: 80%;
+        }
+
+        .overage-title-row {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          font-size: 0.9rem;
+          color: white;
+        }
+
+        .text-amber {
+          color: #f59e0b;
+        }
+
+        .overage-desc {
+          font-size: 0.78rem;
+          color: var(--text-muted);
+          line-height: 1.35;
+        }
+
+        .toggle-switch-btn {
+          width: 50px;
+          height: 28px;
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.15);
+          border: none;
+          padding: 2px;
+          cursor: pointer;
+          transition: all 0.25s ease;
+          position: relative;
+        }
+
+        .toggle-switch-btn.on {
+          background: #10b981;
+        }
+
+        .toggle-handle {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: white;
+          transition: transform 0.25s ease;
+        }
+
+        .toggle-switch-btn.on .toggle-handle {
+          transform: translateX(22px);
+        }
+
+        .pkg-card-actions {
+          display: flex;
+          gap: 1rem;
+        }
+
+        .upgrade-tier-btn {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          padding: 0.75rem;
+          background: rgba(99, 102, 241, 0.18);
+          border: 1px solid rgba(99, 102, 241, 0.4);
+          color: white;
+          border-radius: 12px;
+          font-weight: 700;
+          font-size: 0.88rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .upgrade-tier-btn:hover {
+          background: rgba(99, 102, 241, 0.3);
+        }
+
+        .oneclick-topup-btn {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.4rem;
+          padding: 0.75rem;
+          background: rgba(16, 185, 129, 0.15);
+          border: 1px solid rgba(16, 185, 129, 0.35);
+          color: #6ee7b7;
+          border-radius: 12px;
+          font-weight: 700;
+          font-size: 0.88rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .oneclick-topup-btn:hover {
+          background: rgba(16, 185, 129, 0.25);
         }
 
         .security-card {
-          padding: 1.5rem;
+          padding: 2rem;
+          border-radius: 20px;
           display: flex;
           flex-direction: column;
-          gap: 1rem;
+          align-items: center;
+          text-align: center;
           justify-content: center;
         }
-        .shield-icon { color: #10b981; }
-        .security-card h3 { font-size: 1.1rem; }
-        .security-card p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
+
+        .shield-icon {
+          color: var(--primary);
+          margin-bottom: 1rem;
+        }
+
+        .security-card h3 {
+          margin-bottom: 0.5rem;
+          font-size: 1.25rem;
+        }
+
+        .security-card p {
+          color: var(--text-muted);
+          font-size: 0.88rem;
+          line-height: 1.5;
+          margin-bottom: 1.5rem;
+        }
 
         .manage-stripe-btn {
-          background: none;
-          border: 1px solid var(--glass-border);
-          color: var(--text-main);
-          padding: 0.5rem;
-          border-radius: 8px;
-          font-size: 0.85rem;
-          cursor: pointer;
           display: flex;
           align-items: center;
-          justify-content: center;
           gap: 0.5rem;
+          padding: 0.75rem 1.25rem;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--glass-border);
+          color: white;
+          border-radius: 12px;
+          font-size: 0.88rem;
+          font-weight: 600;
+          cursor: pointer;
           transition: var(--transition-fast);
         }
-        .manage-stripe-btn:hover { background: rgba(255,255,255,0.05); }
 
-        .history-section { display: flex; flex-direction: column; gap: 1.5rem; }
+        .manage-stripe-btn:hover:not(:disabled) {
+          background: rgba(255, 255, 255, 0.1);
+        }
+
+        .history-section {
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid var(--glass-border);
+          border-radius: 20px;
+          padding: 2rem;
+        }
 
         .section-header {
           display: flex;
           align-items: center;
           gap: 0.75rem;
+          margin-bottom: 1.5rem;
         }
+
+        .section-header h2 {
+          font-size: 1.3rem;
+          font-weight: 700;
+        }
+
         .tx-count {
-          margin-left: auto;
           font-size: 0.8rem;
           color: var(--text-muted);
-          background: rgba(255,255,255,0.05);
-          padding: 0.2rem 0.6rem;
-          border-radius: 20px;
+          background: rgba(255, 255, 255, 0.05);
+          padding: 0.2rem 0.5rem;
+          border-radius: 6px;
         }
 
-        .transaction-list { display: flex; flex-direction: column; gap: 0.75rem; }
-
-        .tx-loading, .tx-empty {
-          padding: 2rem;
-          text-align: center;
-          color: var(--text-muted);
-          background: rgba(255,255,255,0.02);
-          border-radius: 12px;
-          border: 1px dashed var(--glass-border);
+        .transaction-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
         }
 
         .transaction-item {
-          display: grid;
-          grid-template-columns: auto 1fr auto auto auto;
+          display: flex;
           align-items: center;
-          padding: 1rem 1.5rem;
-          gap: 1.5rem;
+          padding: 1rem 1.25rem;
+          border-radius: 14px;
+          gap: 1.25rem;
         }
 
         .tx-icon-bg {
-          width: 40px; height: 40px;
-          background: rgba(255,255,255,0.03);
+          width: 40px;
+          height: 40px;
           border-radius: 10px;
-          display: flex; align-items: center; justify-content: center;
+          background: rgba(255, 255, 255, 0.05);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
         }
 
-        .tx-details { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-        .tx-type { font-weight: 600; }
-        .tx-desc { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
-        .tx-date { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.1rem; }
-
-        .tx-balance-after { display: flex; flex-direction: column; align-items: flex-end; gap: 0.1rem; }
-        .balance-label { font-size: 0.7rem; color: var(--text-muted); }
-        .balance-value { font-size: 0.9rem; font-weight: 600; color: var(--text-muted); }
-
-        .status-pill {
-          font-size: 0.75rem;
-          padding: 0.2rem 0.6rem;
-          border-radius: 20px;
-        }
-        .status-pill.completed { background: rgba(16, 185, 129, 0.1); color: #10b981; }
-        .status-pill.pending   { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
-        .status-pill.failed    { background: rgba(244, 63, 94, 0.1);  color: #f43f5e; }
-
-        .tx-amount { font-weight: 700; font-family: monospace; font-size: 1rem; white-space: nowrap; }
-        .tx-amount.positive { color: #10b981; }
-        .tx-amount.negative { color: #f43f5e; }
-
-        .modal-overlay {
-          position: fixed;
-          top: 0; left: 0; right: 0; bottom: 0;
-          background: rgba(0,0,0,0.8);
-          backdrop-filter: blur(4px);
-          display: flex; align-items: center; justify-content: center;
-          z-index: 1100;
-        }
-
-        .modal-content {
-          padding: 2.5rem;
-          width: 100%;
-          max-width: 450px;
-          text-align: center;
-        }
-        .modal-content h2 { margin-bottom: 0.5rem; }
-        .modal-content p { color: var(--text-muted); margin-bottom: 0; }
-
-        .amount-options {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 1rem;
-          margin: 2rem 0;
-        }
-
-        .amount-opt {
-          padding: 1rem;
-          background: rgba(255,255,255,0.05);
-          border: 1px solid var(--glass-border);
-          border-radius: 12px;
-          color: white;
-          font-weight: 700;
-          font-size: 1.1rem;
-          cursor: pointer;
-          transition: var(--transition-fast);
+        .tx-details {
+          flex: 1;
           display: flex;
           flex-direction: column;
-          align-items: center;
-          gap: 0.3rem;
+          gap: 0.2rem;
         }
-        .amount-opt-minutes { font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
-        .amount-opt:hover { background: rgba(255,255,255,0.1); }
-        .amount-opt.selected { background: var(--primary); border-color: var(--primary); }
-        .amount-opt.selected .amount-opt-minutes { color: rgba(255,255,255,0.7); }
 
-        .modal-actions { display: flex; gap: 1rem; }
-
-        .confirm-topup-btn {
-          flex: 2;
-          padding: 0.85rem;
-          background: var(--primary);
-          border: none;
-          border-radius: 10px;
-          color: white;
+        .tx-type {
           font-weight: 600;
-          cursor: pointer;
-          transition: var(--transition-fast);
+          font-size: 0.95rem;
         }
-        .confirm-topup-btn:hover:not(:disabled) { background: var(--primary-hover); }
-        .confirm-topup-btn:disabled { opacity: 0.7; cursor: not-allowed; }
 
-        .cancel-btn {
-          flex: 1;
-          background: rgba(255,255,255,0.05);
-          border: 1px solid var(--glass-border);
+        .tx-desc {
+          font-size: 0.82rem;
           color: var(--text-muted);
-          border-radius: 10px;
-          cursor: pointer;
-          transition: var(--transition-fast);
         }
-        .cancel-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
 
-        @media (max-width: 768px) {
-          .wallet-grid { grid-template-columns: 1fr; }
-          .transaction-item { grid-template-columns: auto 1fr auto; }
-          .tx-balance-after { display: none; }
+        .tx-date {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+
+        .tx-balance-after {
+          text-align: right;
+        }
+
+        .balance-label {
+          display: block;
+          font-size: 0.72rem;
+          color: var(--text-muted);
+        }
+
+        .balance-value {
+          font-size: 0.95rem;
+          font-weight: 700;
+          color: white;
+        }
+
+        .status-pill {
+          padding: 0.2rem 0.55rem;
+          border-radius: 6px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          text-transform: capitalize;
+        }
+
+        .status-pill.completed, .status-pill.succeeded {
+          background: rgba(16, 185, 129, 0.15);
+          color: #6ee7b7;
+        }
+
+        .status-pill.pending {
+          background: rgba(245, 158, 11, 0.15);
+          color: #fbbf24;
+        }
+
+        .status-pill.failed {
+          background: rgba(239, 68, 68, 0.15);
+          color: #f87171;
+        }
+
+        @media (max-width: 860px) {
+          .wallet-grid {
+            grid-template-columns: 1fr;
+          }
+          .wallet-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1rem;
+          }
+          .header-actions {
+            width: 100%;
+          }
+          .marketplace-btn {
+            flex: 1;
+            justify-content: center;
+          }
         }
       `}</style>
     </div>

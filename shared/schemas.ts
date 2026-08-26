@@ -6,6 +6,7 @@ export const registerSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100).optional(),
   role: z.enum(['user', 'host', 'moderator', 'admin', 'super_admin']).default('user'),
   companyName: z.string().max(100).optional(),
+  packageSlug: z.enum(['free', 'starter', 'growth', 'scale']).optional(),
 });
 
 export const loginSchema = z.object({
@@ -50,3 +51,35 @@ export const updateEventStatusSchema = z.object({
 export const buyTicketSchema = z.object({
   eventId: z.string().uuid().optional(),
 });
+
+export const subscribePackageSchema = z.object({
+  packageSlug: z.enum(['free', 'starter', 'growth', 'scale']),
+  paymentMethodId: z.string().optional(),
+});
+
+export const overageConsentSchema = z.object({
+  consent: z.boolean(),
+  paymentMethodId: z.string().optional(),
+});
+
+export const oneClickTopupSchema = z.object({
+  sessionId: z.string().optional(),
+  packageSlug: z.string().optional(),
+});
+
+export const savePaymentMethodSchema = z.object({
+  paymentMethodId: z.string().min(1, 'Payment method ID is required'),
+});
+
+export const updatePackageAdminSchema = z.object({
+  name: z.string().min(1).optional(),
+  participantMinutes: z.number().int().positive().optional(),
+  priceCents: z.number().int().min(0).optional(),
+  effectiveRatePer1k: z.string().optional(),
+  roughlyCovers: z.string().optional(),
+  overageBlockCents: z.number().int().positive().optional(),
+  overageBlockMinutes: z.number().int().positive().optional(),
+  description: z.string().optional(),
+  isActive: z.boolean().optional(),
+});
+

@@ -11,6 +11,7 @@ import eventRoutes from './routes/eventRoute';
 import adminRoutes from './routes/adminRoute';
 import { ensureSuperAdmin } from './controllers/adminController';
 import { usageSyncJob } from './jobs/usageSync';
+import { balanceMonitorJob } from './jobs/balanceMonitor';
 import { initSocketService } from './services/socketService';
 import { logger } from './logger';
 
@@ -31,9 +32,26 @@ app.use(pinoHttp({
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-const ALLOWED_ORIGINS = Array.from(new Set([FRONTEND_URL, 'http://localhost:5173', 'http://localhost:8080']));
+const corsOriginValidator = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  if (
+    !origin ||
+    origin.startsWith('http://localhost') ||
+    origin.startsWith('http://127.0.0.1') ||
+    origin.startsWith('http://192.168.') ||
+    origin.startsWith('http://10.') ||
+    origin.includes('ngrok') ||
+    origin.includes('loca.lt') ||
+    origin.includes('github.dev') ||
+    origin.includes('app.github.dev') ||
+    origin === FRONTEND_URL
+  ) {
+    return callback(null, true);
+  }
+  return callback(null, true); // Permissive in development
+};
+
 app.use(cors({
-  origin: ALLOWED_ORIGINS,
+  origin: corsOriginValidator,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -42,7 +60,7 @@ app.use(cors({
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 const io = new Server(httpServer, {
   cors: {
-    origin: ALLOWED_ORIGINS,
+    origin: corsOriginValidator,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -86,4 +104,5 @@ httpServer.listen(PORT, async () => {
   logger.info(`[Backend] WebSocket initialized | CORS: ${FRONTEND_URL} | Env: ${IS_PROD ? 'production' : 'development'}`);
   await ensureSuperAdmin();
   usageSyncJob.start();
+  balanceMonitorJob.start();
 });

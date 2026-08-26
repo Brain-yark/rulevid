@@ -14,6 +14,14 @@ import { API_BASE } from './config';
 import { useToast } from './context/ToastContext';
 import type { User } from '../../shared/types';
 
+// Disable Agora telemetry & diagnostic log upload to prevent ERR_BLOCKED_BY_CLIENT with adblockers/Brave shields
+try {
+  AgoraRTC.disableLogUpload();
+  AgoraRTC.setLogLevel(2); // Only warnings and errors
+} catch (e) {
+  // ignore
+}
+
 const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
 type Page = 'login' | 'events' | 'event-details' | 'dashboard' | 'super-admin' | 'room' | 'wallet' | 'profile' | 'analytics';
@@ -82,6 +90,9 @@ const App: React.FC = () => {
         role: 'user',
         pricingTier: 'standard',
         status: 'active',
+        packageMinutesTotal: 0,
+        packageMinutesUsed: 0,
+        overageConsent: false,
       };
       setUser(loggedUser);
     }

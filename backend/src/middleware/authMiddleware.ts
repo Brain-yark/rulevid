@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { UserRole } from '../../../shared/types';
+import { UserRole } from '@shared/types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 

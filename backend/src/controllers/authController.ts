@@ -3,13 +3,16 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../db';
 import { billingService } from '../services/billingService';
-import { AuthResponse, UserRole, User } from '../../../shared/types';
+import { packageService } from '../services/packageService';
+import { stripeService } from '../services/stripeService';
+import { AuthResponse, UserRole, User } from '@shared/types';
+import { logger } from '../logger';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
 export const register = async (req: Request, res: Response) => {
   try {
-    const { email, password, name, companyName, role = 'user' } = req.body;
+    const { email, password, name, companyName, role = 'user', packageSlug } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -19,10 +22,7 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    // Only 'user' and 'host' are self-registerable roles.
-    // Moderators must be assigned by a host from the dashboard.
-    // Admin/super_admin are system-assigned or seeded.
-    const requestedRole = (req.body.role || 'user').toString().toLowerCase().trim();
+    const requestedRole = (role || 'user').toString().toLowerCase().trim();
     const validSelfRegisterRoles: UserRole[] = ['user', 'host'];
     const assignedRole: UserRole = (validSelfRegisterRoles as string[]).includes(requestedRole)
       ? (requestedRole as UserRole)
@@ -33,13 +33,19 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email is already taken' });
     }
 
+    const selectedSlug = packageSlug || 'free';
+    const isPaidSignup = assignedRole === 'host' && (selectedSlug === 'starter' || selectedSlug === 'growth');
+
+    // If paid host signup, account starts as 'user' until Stripe payment confirms
+    const initialRole: UserRole = isPaidSignup ? 'user' : assignedRole;
+
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase().trim(),
         passwordHash,
         name: name?.trim() || null,
-        role: assignedRole,
+        role: initialRole,
         companyName: companyName?.trim() || null,
         status: 'active',
         emailVerified: false,
@@ -47,21 +53,50 @@ export const register = async (req: Request, res: Response) => {
       },
     });
 
-    // Provision Lago customer + wallet if host or requested
-    let finalWalletId: string | null = null;
+    let checkoutUrl: string | undefined = undefined;
+
+    // If host registering:
     if (assignedRole === 'host') {
+      if (selectedSlug === 'free') {
+        try {
+          await packageService.subscribeFreePackage(user.id);
+          logger.info(`[Auth] Free host package subscribed for ${user.email}`);
+        } catch (pkgErr: any) {
+          logger.warn({ pkgErr: pkgErr.message }, '[Auth] Free package subscription error (non-fatal)');
+        }
+      } else if (isPaidSignup) {
+        try {
+          const pkg = await packageService.getPackageBySlug(selectedSlug);
+          if (pkg) {
+            const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+            const session = await stripeService.createPackageCheckoutSession(
+              user.id,
+              pkg.slug,
+              pkg.name,
+              pkg.priceCents,
+              pkg.participantMinutes,
+              `${FRONTEND_URL}/billing?success=true&package=${pkg.slug}`,
+              `${FRONTEND_URL}/billing?canceled=true`
+            );
+            checkoutUrl = session.url || undefined;
+          }
+        } catch (stripeErr: any) {
+          logger.warn({ stripeErr: stripeErr.message }, '[Auth] Stripe package checkout creation error');
+        }
+      }
+
+      // Provision Lago wallet
       try {
         await billingService.createLagoCustomer(user.id, user.email);
-        finalWalletId = await billingService.createLagoWallet(user.id);
+        const finalWalletId = await billingService.createLagoWallet(user.id);
         if (finalWalletId) {
           await prisma.user.update({
             where: { id: user.id },
             data: { walletId: finalWalletId },
           });
-          console.log(`[Auth] Lago provisioning complete for host ${user.email}`);
         }
-      } catch (lagoErr) {
-        console.error('[Auth] Lago provisioning failed (non-fatal):', lagoErr);
+      } catch (lagoErr: any) {
+        logger.warn({ lagoErr: lagoErr.message }, '[Auth] Lago provisioning failed (non-fatal)');
       }
     }
 
@@ -71,25 +106,38 @@ export const register = async (req: Request, res: Response) => {
       { expiresIn: '7d' }
     );
 
-    const authResponse: AuthResponse = {
+    const freshUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      include: { billingPackage: true },
+    });
+
+    const authResponse: AuthResponse & { checkoutUrl?: string } = {
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name || undefined,
-        role: user.role as UserRole,
-        emailVerified: user.emailVerified,
-        lastLoginAt: user.lastLoginAt?.toISOString(),
-        companyName: user.companyName || undefined,
-        pricingTier: user.pricingTier,
-        status: user.status,
-        walletId: finalWalletId ?? undefined,
+        id: freshUser!.id,
+        email: freshUser!.email,
+        name: freshUser!.name || undefined,
+        role: freshUser!.role as UserRole,
+        emailVerified: freshUser!.emailVerified,
+        lastLoginAt: freshUser!.lastLoginAt?.toISOString(),
+        companyName: freshUser!.companyName || undefined,
+        pricingTier: freshUser!.pricingTier,
+        status: freshUser!.status,
+        walletId: freshUser!.walletId ?? undefined,
+        billingPackageId: freshUser!.billingPackageId ?? undefined,
+        billingPackage: freshUser!.billingPackage as any,
+        packageMinutesTotal: freshUser!.packageMinutesTotal,
+        packageMinutesUsed: freshUser!.packageMinutesUsed,
+        packageCycleStartedAt: freshUser!.packageCycleStartedAt?.toISOString(),
+        packageCycleExpiresAt: freshUser!.packageCycleExpiresAt?.toISOString(),
+        overageConsent: freshUser!.overageConsent,
       },
       token,
+      ...(checkoutUrl ? { checkoutUrl } : {}),
     };
 
     return res.status(201).json(authResponse);
-  } catch (error) {
-    console.error('[Auth] Register error:', error);
+  } catch (error: any) {
+    logger.error({ error: error.message }, '[Auth] Register error');
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -119,6 +167,7 @@ export const login = async (req: Request, res: Response) => {
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
+      include: { billingPackage: true },
     });
 
     const token = jwt.sign(
@@ -139,6 +188,13 @@ export const login = async (req: Request, res: Response) => {
         pricingTier: updatedUser.pricingTier,
         status: updatedUser.status,
         walletId: updatedUser.walletId || undefined,
+        billingPackageId: updatedUser.billingPackageId || undefined,
+        billingPackage: updatedUser.billingPackage as any,
+        packageMinutesTotal: updatedUser.packageMinutesTotal,
+        packageMinutesUsed: updatedUser.packageMinutesUsed,
+        packageCycleStartedAt: updatedUser.packageCycleStartedAt?.toISOString(),
+        packageCycleExpiresAt: updatedUser.packageCycleExpiresAt?.toISOString(),
+        overageConsent: updatedUser.overageConsent,
       },
       token,
     };
@@ -165,7 +221,10 @@ export const getMe = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      include: { billingPackage: true },
+    });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -190,6 +249,13 @@ export const getMe = async (req: Request, res: Response) => {
         pricingTier: user.pricingTier,
         status: user.status,
         walletId: user.walletId || undefined,
+        billingPackageId: user.billingPackageId || undefined,
+        billingPackage: user.billingPackage as any,
+        packageMinutesTotal: user.packageMinutesTotal,
+        packageMinutesUsed: user.packageMinutesUsed,
+        packageCycleStartedAt: user.packageCycleStartedAt?.toISOString(),
+        packageCycleExpiresAt: user.packageCycleExpiresAt?.toISOString(),
+        overageConsent: user.overageConsent,
         createdAt: user.createdAt?.toISOString(),
       },
       token,
@@ -269,6 +335,10 @@ export const updateProfile = async (req: Request, res: Response) => {
       pricingTier: updated.pricingTier,
       status: updated.status,
       walletId: updated.walletId || undefined,
+      billingPackageId: updated.billingPackageId || undefined,
+      packageMinutesTotal: updated.packageMinutesTotal,
+      packageMinutesUsed: updated.packageMinutesUsed,
+      overageConsent: updated.overageConsent,
       createdAt: updated.createdAt?.toISOString(),
     };
 
