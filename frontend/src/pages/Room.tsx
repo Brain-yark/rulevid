@@ -15,6 +15,7 @@ import {
   useRTCClient
 } from "agora-rtc-react";
 import { io, Socket } from 'socket.io-client';
+import { API_BASE } from '../config';
 
 // SVSM App ID - normally handled via env but currently passed raw per user direction
 const APP_ID = import.meta.env.VITE_AGORA_APP_ID as string;
@@ -22,12 +23,13 @@ if (!APP_ID) {
   console.error("Missing VITE_AGORA_APP_ID environment variable!");
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const CHAT_APP_KEY = import.meta.env.VITE_AGORA_CHAT_APP_KEY || "41200015236#200018450";
 
 interface RoomProps {
-  sessionId: string;
+  sessionId?: string;
+  eventId?: string;
   onExit: () => void;
+  onGoToEventDetails?: (eventId: string) => void;
 }
 
 interface AgoraConfig {
@@ -35,62 +37,115 @@ interface AgoraConfig {
   token: string;
   uid: number;
   expiresAt: number;
+  isHost?: boolean;
+  eventTitle?: string;
   // Chat properties
   chatToken: string;
   chatUsername: string;
   agoraChatRoomId: string;
 }
 
-const Room: React.FC<RoomProps> = ({ sessionId, onExit }) => {
+const Room: React.FC<RoomProps> = ({ sessionId, eventId, onExit, onGoToEventDetails }) => {
   const [config, setConfig] = useState<AgoraConfig | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isScheduled, setIsScheduled] = useState<boolean>(false);
+  const [scheduledStartsAt, setScheduledStartsAt] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchToken = async () => {
       const authToken = localStorage.getItem('auth_token');
       try {
-        const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/join`, {
+        const joinUrl = eventId
+          ? `${API_BASE}/api/v1/events/${eventId}/join`
+          : `${API_BASE}/api/v1/sessions/${sessionId}/join`;
+
+        const res = await fetch(joinUrl, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${authToken}` }
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
         });
+
         const data = await res.json();
-        if (data.agoraToken && data.session) {
+
+        if (!res.ok) {
+          setErrorMessage(data.message || data.error || 'Failed to access live session');
+          return;
+        }
+
+        if (data.status === 'scheduled') {
+          setIsScheduled(true);
+          setScheduledStartsAt(data.startsAt);
+          return;
+        }
+
+        if (data.agoraToken && (data.session || data.event)) {
+          const channelName = data.session?.channelName || data.event?.session?.channelName;
           setConfig({
-            channel: data.session.channelName,
+            channel: channelName,
             token: data.agoraToken,
             uid: data.uid,
             expiresAt: data.expiresAt,
+            isHost: data.isHost,
+            eventTitle: data.event?.title || data.session?.title,
             chatToken: data.chatToken,
             chatUsername: data.chatUsername,
-            agoraChatRoomId: data.agoraChatRoomId
+            agoraChatRoomId: data.agoraChatRoomId,
           });
         } else {
-          // Demo fallback for frontend test mode
-          setConfig({
-            channel: 'demo_channel_123',
-            token: 'demo_token',
-            uid: 1001,
-            expiresAt: Math.floor(Date.now() / 1000) + 3600,
-            chatToken: 'demo_chat_token',
-            chatUsername: 'Facilitator (Demo)',
-            agoraChatRoomId: 'demo_room'
-          });
+          setErrorMessage(data.message || data.error || 'Failed to join live session');
         }
-      } catch (e) {
-        // Demo fallback for frontend test mode
-        setConfig({
-          channel: 'demo_channel_123',
-          token: 'demo_token',
-          uid: 1001,
-          expiresAt: Math.floor(Date.now() / 1000) + 3600,
-          chatToken: 'demo_chat_token',
-          chatUsername: 'Facilitator (Demo)',
-          agoraChatRoomId: 'demo_room'
-        });
+      } catch (e: any) {
+        setErrorMessage('Unable to connect to live room server');
       }
     };
     fetchToken();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, eventId]);
+
+  if (errorMessage) {
+    return (
+      <div className="room-container error-state glass-card animate-fade-in" style={{ padding: '3rem', textAlign: 'center', maxWidth: '500px', margin: '4rem auto' }}>
+        <h3 style={{ color: '#f43f5e', marginBottom: '1rem', fontSize: '1.4rem' }}>Access Restricted</h3>
+        <p style={{ color: '#94a3b8', marginBottom: '2rem', lineHeight: '1.5' }}>{errorMessage}</p>
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+          <button className="secondary-btn" onClick={onExit} style={{ padding: '0.75rem 1.25rem', borderRadius: '10px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}>
+            Exit
+          </button>
+          {eventId && onGoToEventDetails && (
+            <button className="primary-btn" onClick={() => onGoToEventDetails(eventId)} style={{ padding: '0.75rem 1.5rem', borderRadius: '10px', cursor: 'pointer', background: 'linear-gradient(135deg, #6366f1 0%, #4338ca 100%)', color: 'white', border: 'none', fontWeight: 600 }}>
+              Buy Ticket
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (isScheduled) {
+    return (
+      <div className="room-container scheduled-state glass-card animate-fade-in" style={{ padding: '3rem', textAlign: 'center', maxWidth: '500px', margin: '4rem auto' }}>
+        <h3 style={{ color: '#6366f1', marginBottom: '1rem', fontSize: '1.4rem' }}>Ticket Confirmed — Waiting for Host</h3>
+        <p style={{ color: '#94a3b8', marginBottom: '1.5rem', lineHeight: '1.5' }}>
+          Your seat is confirmed! The host has not started the live broadcast yet.
+        </p>
+        {scheduledStartsAt && (
+          <p style={{ color: '#f8fafc', fontWeight: 600, marginBottom: '2rem' }}>
+            Scheduled for: {new Date(scheduledStartsAt).toLocaleString()}
+          </p>
+        )}
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+          <button className="secondary-btn" onClick={onExit} style={{ padding: '0.75rem 1.25rem', borderRadius: '10px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}>
+            Back
+          </button>
+          <button className="primary-btn" onClick={() => window.location.reload()} style={{ padding: '0.75rem 1.5rem', borderRadius: '10px', cursor: 'pointer', background: 'linear-gradient(135deg, #6366f1 0%, #4338ca 100%)', color: 'white', border: 'none', fontWeight: 600 }}>
+            Refresh
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!config) {
     return <div className="room-container loading">Initializing securely...</div>;
@@ -98,7 +153,7 @@ const Room: React.FC<RoomProps> = ({ sessionId, onExit }) => {
 
   return (
     <RoomErrorBoundary onExit={onExit}>
-      <ActiveRoom config={config} sessionId={sessionId} onExit={onExit} />
+      <ActiveRoom config={config} sessionId={sessionId || eventId || ''} eventId={eventId} onExit={onExit} />
     </RoomErrorBoundary>
   );
 };
@@ -168,7 +223,7 @@ class RoomErrorBoundary extends Component<{children: React.ReactNode, onExit?: (
 
 const defaultScreenConfig = {};
 
-const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () => void}> = ({ config, sessionId, onExit }) => {
+const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: string, onExit: () => void}> = ({ config, sessionId, eventId, onExit }) => {
   const mainClient = useRTCClient();
   const [showParticipants, setShowParticipants] = useState(false);
   const [messages, setMessages] = useState<{ id: string; sender: string; text: string; time: string; self: boolean }[]>([]);
@@ -214,7 +269,7 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
     }
   }, [localVideoStream]);
 
-  const isAgoraReady = Boolean(APP_ID && config.token && config.token !== 'demo_token' && config.channel !== 'demo_channel_123');
+  const isAgoraReady = Boolean(APP_ID && config.token && config.channel);
 
   // Agora Hooks
   const { localMicrophoneTrack } = useLocalMicrophoneTrack(isMicOn && isAgoraReady);
@@ -400,16 +455,28 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
     setIsSharing(!isSharing);
   };
 
-  const handleExit = async () => {
+  const handleEndSessionForAll = async () => {
+    if (!window.confirm('Are you sure you want to end this live session for everyone?')) return;
     const authToken = localStorage.getItem('auth_token');
     try {
-      await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/end`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
+      if (eventId && config.isHost) {
+        await fetch(`${API_BASE}/api/v1/events/${eventId}/end`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      } else if (sessionId && !eventId) {
+        await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/end`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      }
     } catch (e) {
-      console.error('Failed to end session on backend:', e);
+      console.error('Failed to end session/event on backend:', e);
     }
+    onExit();
+  };
+
+  const handleLeaveRoom = () => {
     onExit();
   };
 
@@ -475,24 +542,42 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
               <button 
                 className={`control-btn ${!isMicOn ? 'off' : ''}`} 
                 onClick={toggleMic}
+                title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}
               >
                 {!isMicOn ? <MicOff /> : <Mic />}
               </button>
               <button 
                 className={`control-btn ${!isCameraOn ? 'off' : ''}`} 
                 onClick={toggleVideo}
+                title={isCameraOn ? "Turn Camera Off" : "Turn Camera On"}
               >
                 {!isCameraOn ? <VideoOff /> : <VideoIcon />}
               </button>
-              <button className="control-btn" onClick={() => alert('Hand raised')}><Hand /></button>
+              <button className="control-btn" onClick={() => alert('Hand raised')} title="Raise Hand"><Hand /></button>
               <button 
                 className={`control-btn ${isSharing ? 'active-share' : ''}`} 
                 onClick={toggleScreenShare}
+                title="Toggle Screen Share"
               >
                 <Share2 />
               </button>
-              <button className="control-btn" onClick={() => alert('Settings coming soon')}><Settings /></button>
-              <button className="control-btn end-call" onClick={handleExit}><PhoneOff /></button>
+              <button className="control-btn" onClick={() => alert('Settings coming soon')} title="Settings"><Settings /></button>
+              
+              {/* Leave Room for Attendees / Hosts */}
+              <button className="control-btn leave-call-btn" onClick={handleLeaveRoom} title="Leave room">
+                <PhoneOff />
+              </button>
+
+              {/* Explicit End Session button for Hosts */}
+              {config.isHost && (
+                <button 
+                  className="control-btn end-session-host-btn" 
+                  onClick={handleEndSessionForAll}
+                  title="End live broadcast for all participants"
+                >
+                  End Session
+                </button>
+              )}
             </div>
           </div>
 
@@ -738,8 +823,23 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, onExit: () =
 
         .control-btn:hover { background: rgba(255, 255, 255, 0.2); }
         .control-btn.off { background: var(--accent); }
-        .end-call { background: var(--accent); }
-        .end-call:hover { background: #e11d48; }
+        .end-call, .leave-call-btn { background: rgba(244, 63, 94, 0.2); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.4); }
+        .leave-call-btn:hover { background: #f43f5e; color: white; }
+        .end-session-host-btn {
+          background: #f43f5e;
+          color: white;
+          width: auto !important;
+          padding: 0 1.25rem !important;
+          font-weight: 700;
+          font-size: 0.9rem;
+          letter-spacing: 0.02em;
+          box-shadow: 0 4px 14px rgba(244, 63, 94, 0.4);
+        }
+        .end-session-host-btn:hover {
+          background: #e11d48;
+          transform: translateY(-1px);
+          box-shadow: 0 6px 20px rgba(244, 63, 94, 0.6);
+        }
 
         .side-panel {
           width: 350px;

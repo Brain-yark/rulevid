@@ -30,76 +30,142 @@ export const stripeWebhookHandler = async (req: Request, res: Response) => {
   // ── Handle events ──────────────────────────────────────────────────────────
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as any;
-    const { userId, amount, type } = session.metadata || {};
+    const { userId, amount, type, eventId, ticketId, priceCents } = session.metadata || {};
 
-    if (type !== 'wallet_topup' || !userId || !amount) {
-      console.warn('[Webhook] Ignoring non-topup event or missing metadata');
+    if (type === 'event_ticket') {
+      console.log(`[Webhook] checkout.session.completed — Ticket purchase for event ${eventId}, user ${userId}, ticket ${ticketId}`);
+
+      try {
+        const paymentIntentId = (session.payment_intent as string) || null;
+
+        if (ticketId) {
+          await prisma.ticket.update({
+            where: { id: ticketId },
+            data: {
+              status: 'paid',
+              stripeCheckoutSessionId: session.id,
+              stripePaymentIntentId: paymentIntentId,
+            },
+          });
+          console.log(`[Webhook] Ticket ${ticketId} updated to paid`);
+        } else if (eventId && userId) {
+          // Fallback if ticketId wasn't in metadata
+          const existingTicket = await prisma.ticket.findFirst({
+            where: { eventId, userId },
+          });
+
+          if (existingTicket) {
+            await prisma.ticket.update({
+              where: { id: existingTicket.id },
+              data: {
+                status: 'paid',
+                stripeCheckoutSessionId: session.id,
+                stripePaymentIntentId: paymentIntentId,
+              },
+            });
+            console.log(`[Webhook] Existing ticket ${existingTicket.id} updated to paid`);
+          } else {
+            await prisma.ticket.create({
+              data: {
+                eventId,
+                userId,
+                status: 'paid',
+                amountCents: priceCents ? parseInt(priceCents, 10) : session.amount_total || 0,
+                stripeCheckoutSessionId: session.id,
+                stripePaymentIntentId: paymentIntentId,
+              },
+            });
+            console.log(`[Webhook] New paid ticket created for event ${eventId} and user ${userId}`);
+          }
+        }
+
+        // Save stripe customer ID if present
+        if (userId && session.customer) {
+          await prisma.user.update({
+            where: { id: userId },
+            data: { stripeCustomerId: session.customer as string },
+          }).catch(() => null);
+        }
+      } catch (ticketErr) {
+        console.error('[Webhook] Failed to process ticket fulfillment:', ticketErr);
+      }
+
       return res.status(200).json({ received: true });
     }
 
-    const topupAmount = parseFloat(amount);
-    console.log(`[Webhook] checkout.session.completed — user ${userId} paid $${topupAmount}`);
-
-    try {
-      // 1. Fetch user to get walletId
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user) {
-        console.error(`[Webhook] User ${userId} not found in DB`);
-        return res.status(200).json({ received: true }); // Return 200 so Stripe doesn't retry
+    if (type === 'wallet_topup') {
+      if (!userId || !amount) {
+        console.warn('[Webhook] Missing userId or amount in wallet_topup metadata');
+        return res.status(200).json({ received: true });
       }
 
-      // 2. Ensure we have a Lago wallet — provision if missing
-      // Also update stripeCustomerId if not already set
-      let walletId = user.walletId;
-      const stripeCustomerId = session.customer as string;
-      
-      const updateData: any = {};
-      if (stripeCustomerId && user.stripeCustomerId !== stripeCustomerId) {
-        updateData.stripeCustomerId = stripeCustomerId;
-      }
+      const topupAmount = parseFloat(amount);
+      console.log(`[Webhook] checkout.session.completed — user ${userId} paid $${topupAmount}`);
 
-      if (!walletId) {
-        console.log(`[Webhook] No walletId for ${userId}, provisioning now...`);
-        await billingService.createLagoCustomer(userId, user.email);
-        walletId = await billingService.createLagoWallet(userId);
-        if (walletId) {
-          updateData.walletId = walletId;
+      try {
+        // 1. Fetch user to get walletId
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) {
+          console.error(`[Webhook] User ${userId} not found in DB`);
+          return res.status(200).json({ received: true }); // Return 200 so Stripe doesn't retry
         }
+
+        // 2. Ensure we have a Lago wallet — provision if missing
+        // Also update stripeCustomerId if not already set
+        let walletId = user.walletId;
+        const stripeCustomerId = session.customer as string;
+        
+        const updateData: any = {};
+        if (stripeCustomerId && user.stripeCustomerId !== stripeCustomerId) {
+          updateData.stripeCustomerId = stripeCustomerId;
+        }
+
+        if (!walletId) {
+          console.log(`[Webhook] No walletId for ${userId}, provisioning now...`);
+          await billingService.createLagoCustomer(userId, user.email);
+          walletId = await billingService.createLagoWallet(userId);
+          if (walletId) {
+            updateData.walletId = walletId;
+          }
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await prisma.user.update({ where: { id: userId }, data: updateData });
+        }
+
+        // 3. Credit the Lago wallet
+        if (walletId) {
+          await billingService.creditWallet(walletId, topupAmount);
+        } else {
+          console.warn(`[Webhook] Could not credit wallet for ${userId} — walletId unavailable`);
+        }
+
+        // 4. Fetch updated balance for accurate Transaction record
+        const updatedWallet = await billingService.getWalletBalance(userId);
+
+        // 5. Record Transaction in SVSM DB
+        await prisma.transaction.create({
+          data: {
+            type: 'topup',
+            amount: topupAmount,
+            currency: 'USD',
+            balanceAfter: updatedWallet.balance,
+            description: `Stripe top-up via Checkout Session ${session.id}`,
+            lagoTransactionId: walletId ?? undefined,
+            status: 'completed',
+            userId,
+          },
+        });
+
+        console.log(`[Webhook] Successfully processed top-up of $${topupAmount} for user ${userId}`);
+      } catch (err) {
+        console.error('[Webhook] Failed to process top-up:', err);
       }
 
-      if (Object.keys(updateData).length > 0) {
-        await prisma.user.update({ where: { id: userId }, data: updateData });
-      }
-
-      // 3. Credit the Lago wallet
-      if (walletId) {
-        await billingService.creditWallet(walletId, topupAmount);
-      } else {
-        console.warn(`[Webhook] Could not credit wallet for ${userId} — walletId unavailable`);
-      }
-
-      // 4. Fetch updated balance for accurate Transaction record
-      const updatedWallet = await billingService.getWalletBalance(userId);
-
-      // 5. Record Transaction in SVSM DB
-      await prisma.transaction.create({
-        data: {
-          type: 'topup',
-          amount: topupAmount,
-          currency: 'USD',
-          balanceAfter: updatedWallet.balance,
-          description: `Stripe top-up via Checkout Session ${session.id}`,
-          lagoTransactionId: walletId ?? undefined,
-          status: 'completed',
-          userId,
-        },
-      });
-
-      console.log(`[Webhook] Successfully processed top-up of $${topupAmount} for user ${userId}`);
-    } catch (err) {
-      console.error('[Webhook] Failed to process top-up:', err);
-      // Return 200 to prevent Stripe retrying — log the issue for manual review
+      return res.status(200).json({ received: true });
     }
+
+    console.warn(`[Webhook] Unrecognized checkout session type: ${type}`);
   } else {
     console.log(`[Webhook] Unhandled event type: ${event.type}`);
   }

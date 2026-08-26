@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { prisma } from '../db';
 
 class BillingService {
   private apiUrl = process.env.LAGO_API_URL || 'http://localhost:3000';
@@ -15,8 +16,16 @@ class BillingService {
 
   async getWalletBalance(facilitatorId: string): Promise<{ balance: number; currency: string }> {
     if (!this.apiKey) {
-      console.warn('[Lago] LAGO_API_KEY not configured, returning mock balance');
-      return { balance: 124.50, currency: 'USD' };
+      // Calculate real balance from latest completed transaction in DB
+      try {
+        const latestTx = await prisma.transaction.findFirst({
+          where: { userId: facilitatorId, status: 'completed' },
+          orderBy: { createdAt: 'desc' },
+        });
+        return { balance: latestTx ? latestTx.balanceAfter : 0, currency: 'USD' };
+      } catch (dbErr) {
+        return { balance: 0, currency: 'USD' };
+      }
     }
 
     try {

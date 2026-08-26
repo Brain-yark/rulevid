@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Play, Calendar, Users, Clock, Search, Video, Copy, Check, X } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Plus, Play, Calendar, Users, Clock, Search, Video, Copy, Check, X, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react';
+import { API_BASE } from '../config';
 
 interface Session {
   id: string;
@@ -15,6 +16,22 @@ interface DashboardProps {
   onGoToWallet: () => void;
 }
 
+// ── Inline Toast System ─────────────────────────────────────────────────────
+type ToastType = 'success' | 'error' | 'warning' | 'info';
+interface Toast { id: number; type: ToastType; message: string; }
+let _toastId = 0;
+const useDashToast = () => {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const addToast = useCallback((message: string, type: ToastType = 'info') => {
+    const id = ++_toastId;
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4500);
+  }, []);
+  const removeToast = useCallback((id: number) => setToasts(prev => prev.filter(t => t.id !== id)), []);
+  return { toasts, addToast, removeToast };
+};
+// ────────────────────────────────────────────────────────────────────────────
+
 const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
   const [balance, setBalance] = useState<number | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -24,6 +41,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const { toasts, addToast, removeToast } = useDashToast();
+
+  // Read real user info from localStorage
+  const storedUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
+  const displayName = storedUser.companyName || storedUser.email?.split('@')[0] || 'Host';
 
   useEffect(() => {
     fetchBalance();
@@ -40,46 +62,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     const token = localStorage.getItem('auth_token');
     if (!token) return;
     try {
-      const response = await fetch('http://localhost:3001/api/v1/billing/balance', {
+      const response = await fetch(`${API_BASE}/api/v1/billing/balance`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
         const data = await response.json();
-        setBalance(data.balance);
+        setBalance(data.balance ?? 0);
       } else {
-        setBalance(250.00); // Demo fallback
+        setBalance(null);
       }
     } catch (e) {
-      setBalance(250.00); // Demo fallback
+      setBalance(null);
     }
   };
-
-  const MOCK_SESSIONS: Session[] = [
-    {
-      id: 'sess-demo-1',
-      title: 'Global Product Keynote & Live Q&A 2026',
-      channelName: 'f_demo_1',
-      status: 'active',
-      participantCount: 42,
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: 'sess-demo-2',
-      title: 'Q3 Financial Strategy Briefing',
-      channelName: 'f_demo_2',
-      status: 'scheduled',
-      participantCount: 18,
-      createdAt: new Date(Date.now() - 86400000).toISOString()
-    },
-    {
-      id: 'sess-demo-3',
-      title: 'Engineering Architecture All-Hands',
-      channelName: 'f_demo_3',
-      status: 'ended',
-      participantCount: 115,
-      createdAt: new Date(Date.now() - 259200000).toISOString()
-    }
-  ];
 
   const fetchSessions = async () => {
     const token = localStorage.getItem('auth_token');
@@ -90,16 +85,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       if (search) query.append('search', search);
       if (filter) query.append('status', filter);
 
-      const response = await fetch(`http://localhost:3001/api/v1/sessions?${query}`, {
+      const response = await fetch(`${API_BASE}/api/v1/sessions?${query}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
         setSessions(await response.json());
       } else {
-        setSessions(MOCK_SESSIONS);
+        setSessions([]);
       }
     } catch (e) {
-      setSessions(MOCK_SESSIONS);
+      setSessions([]);
     }
   };
 
@@ -110,7 +105,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
     const token = localStorage.getItem('auth_token');
     setIsCreating(true);
     try {
-      const response = await fetch('http://localhost:3001/api/v1/sessions', {
+      const response = await fetch(`${API_BASE}/api/v1/sessions`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -122,13 +117,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       if (response.ok) {
         setNewTitle('');
         setIsModalOpen(false);
+        addToast('Session created successfully!', 'success');
         await fetchSessions();
       } else {
-        alert('Failed to create session');
+        addToast('Failed to create session. Please try again.', 'error');
       }
     } catch (e) {
       console.error(e);
-      alert('Error creating session');
+      addToast('Network error — could not create session.', 'error');
     } finally {
       setIsCreating(false);
     }
@@ -143,9 +139,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
 
   return (
     <div className="dashboard">
+      {/* ── Toast Container ── */}
+      <div className="toast-container">
+        {toasts.map(t => {
+          const icon = t.type === 'success' ? <CheckCircle size={18} /> : t.type === 'error' ? <AlertCircle size={18} /> : <AlertTriangle size={18} />;
+          return (
+            <div key={t.id} className={`toast-item toast-${t.type}`}>
+              <span className="toast-icon">{icon}</span>
+              <span className="toast-msg">{t.message}</span>
+              <button className="toast-close" onClick={() => removeToast(t.id)}><X size={14} /></button>
+            </div>
+          );
+        })}
+      </div>
       <header className="dashboard-header">
         <div>
-          <h1>Welcome back, Facilitator</h1>
+          <h1>Welcome back, {displayName}</h1>
           <p className="subtitle">Manage your streaming sessions and participants</p>
         </div>
         <button className="create-session-btn" onClick={() => setIsModalOpen(true)}>
@@ -247,10 +256,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
                         onClick={async () => {
                           if (confirm('End this session for everyone?')) {
                             const token = localStorage.getItem('auth_token');
-                            await fetch(`http://localhost:3001/api/v1/sessions/${session.id}/end`, {
+                            const res = await fetch(`${API_BASE}/api/v1/sessions/${session.id}/end`, {
                               method: 'POST',
                               headers: { 'Authorization': `Bearer ${token}` }
                             });
+                            if (res.ok) {
+                              addToast('Session ended successfully.', 'success');
+                            } else {
+                              addToast('Failed to end session. Please try again.', 'error');
+                            }
                             fetchSessions();
                           }
                         }}
@@ -338,6 +352,57 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       )}
 
       <style>{`
+        .toast-container {
+          position: fixed;
+          bottom: 1.5rem;
+          right: 1.5rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.6rem;
+          z-index: 9999;
+          pointer-events: none;
+        }
+
+        .toast-item {
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+          padding: 0.75rem 1rem;
+          border-radius: 12px;
+          font-size: 0.88rem;
+          font-weight: 500;
+          min-width: 280px;
+          max-width: 400px;
+          pointer-events: all;
+          animation: toastIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          backdrop-filter: blur(12px);
+          box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+
+        @keyframes toastIn {
+          from { opacity: 0; transform: translateX(40px); }
+          to   { opacity: 1; transform: translateX(0); }
+        }
+
+        .toast-success { background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.45); color: #6ee7b7; }
+        .toast-error   { background: rgba(244,63,94,0.18);  border: 1px solid rgba(244,63,94,0.45);  color: #fda4af; }
+        .toast-warning { background: rgba(245,158,11,0.18); border: 1px solid rgba(245,158,11,0.45); color: #fcd34d; }
+        .toast-info    { background: rgba(99,102,241,0.18); border: 1px solid rgba(99,102,241,0.45); color: #a5b4fc; }
+
+        .toast-icon { flex-shrink: 0; }
+        .toast-msg  { flex: 1; }
+        .toast-close {
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: inherit;
+          opacity: 0.6;
+          padding: 0;
+          display: flex;
+          align-items: center;
+        }
+        .toast-close:hover { opacity: 1; }
+
         .dashboard {
           display: flex;
           flex-direction: column;

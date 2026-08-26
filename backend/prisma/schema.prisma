@@ -10,12 +10,18 @@ model User {
   id               String        @id @default(uuid())
   email            String        @unique
   passwordHash     String
+  name             String?
+  role             String        @default("user")     // user (attendee), host (facilitator), moderator, admin, super_admin
+  emailVerified    Boolean       @default(false)
+  lastLoginAt      DateTime?
   companyName      String?
   walletId         String?       // Reference to Lago wallet
   stripeCustomerId String?
   pricingTier      String        @default("standard") // standard: $0.003, premium: $0.004
   status           String        @default("active")   // active, suspended, pending
-  sessions         Session[]
+  sessions         Session[]     @relation("FacilitatorSessions")
+  eventsHosted     Event[]       @relation("FacilitatorEvents")
+  tickets          Ticket[]
   transactions     Transaction[]
   usageRecords     UsageRecord[]
   createdAt        DateTime      @default(now())
@@ -35,11 +41,43 @@ model Session {
   recordingResourceId String?       // Agora Cloud Recording resource ID
   recordingSid        String?       // Agora Cloud Recording session ID
   agoraChatRoomId     String?       // Agora Chat Room ID
-  facilitator         User          @relation(fields: [facilitatorId], references: [id])
+  facilitator         User          @relation("FacilitatorSessions", fields: [facilitatorId], references: [id])
   facilitatorId       String
   usageRecords        UsageRecord[]
+  event               Event?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
+}
+
+model Event {
+  id            String    @id @default(uuid())
+  facilitator   User      @relation("FacilitatorEvents", fields: [facilitatorId], references: [id])
+  facilitatorId String
+  title         String
+  description   String?
+  startsAt      DateTime
+  status        String    @default("draft") // draft, published, live, ended, cancelled
+  priceCents    Int       @default(0)       // single ticket price in cents (0 = free)
+  capacity      Int?                        // null = unlimited
+  session       Session?  @relation(fields: [sessionId], references: [id])
+  sessionId     String?   @unique
+  tickets       Ticket[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Ticket {
+  id                      String   @id @default(uuid())
+  event                   Event    @relation(fields: [eventId], references: [id])
+  eventId                 String
+  user                    User     @relation(fields: [userId], references: [id])
+  userId                  String
+  stripeCheckoutSessionId String?  @unique
+  stripePaymentIntentId   String?
+  status                  String   @default("pending") // pending, paid, refunded, cancelled
+  amountCents             Int
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
 
 model Transaction {
@@ -57,14 +95,14 @@ model Transaction {
 }
 
 model UsageRecord {
-  id               String   @id @default(uuid())
-  minutesUsed      Int
+  id                String    @id @default(uuid())
+  minutesUsed       Int
   costToFacilitator Float
-  ratePerMinute    Float
-  syncedAt         DateTime?
-  user             User     @relation(fields: [userId], references: [id])
-  userId           String
-  session          Session  @relation(fields: [sessionId], references: [id])
-  sessionId        String
-  createdAt        DateTime @default(now())
+  ratePerMinute     Float
+  syncedAt          DateTime?
+  user              User      @relation(fields: [userId], references: [id])
+  userId            String
+  session           Session   @relation(fields: [sessionId], references: [id])
+  sessionId         String
+  createdAt         DateTime  @default(now())
 }

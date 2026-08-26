@@ -11,6 +11,7 @@ import {
   XCircle,
   RefreshCw,
 } from 'lucide-react';
+import { API_BASE } from '../config';
 
 interface WalletProps {
   onBack: () => void;
@@ -27,7 +28,7 @@ interface Transaction {
   createdAt: string;
 }
 
-const API_BASE = 'http://localhost:3001/api/v1';
+const WALLET_API = `${API_BASE}/api/v1`;
 
 const Wallet: React.FC<WalletProps> = () => {
   const [balance, setBalance] = useState(0);
@@ -45,50 +46,20 @@ const Wallet: React.FC<WalletProps> = () => {
     return { Authorization: `Bearer ${token}` };
   };
 
-  const MOCK_TRANSACTIONS: Transaction[] = [
-    {
-      id: 'tx-demo-1',
-      type: 'topup',
-      amount: 100.00,
-      currency: 'USD',
-      balanceAfter: 250.00,
-      description: 'Stripe Card Top-Up (Demo)',
-      status: 'completed',
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: 'tx-demo-2',
-      type: 'deduction',
-      amount: -15.00,
-      currency: 'USD',
-      balanceAfter: 150.00,
-      description: 'Stream Usage (5,000 mins @ $0.003/min)',
-      status: 'completed',
-      createdAt: new Date(Date.now() - 86400000 * 2).toISOString()
-    },
-    {
-      id: 'tx-demo-3',
-      type: 'topup',
-      amount: 165.00,
-      currency: 'USD',
-      balanceAfter: 165.00,
-      description: 'Initial Account Deposit',
-      status: 'completed',
-      createdAt: new Date(Date.now() - 86400000 * 7).toISOString()
-    }
-  ];
-
   const fetchBalance = React.useCallback(async () => {
     setIsLoadingBalance(true);
     try {
-      const res = await fetch(`${API_BASE}/billing/balance`, {
+      const res = await fetch(`${WALLET_API}/billing/balance`, {
         headers: getAuthHeader(),
       });
       const data = await res.json();
-      if (res.ok) setBalance(data.balance ?? 0);
-      else setBalance(250.00);
+      if (res.ok) {
+        setBalance(data.balance ?? 0);
+      } else {
+        setBalance(0);
+      }
     } catch (e) {
-      setBalance(250.00);
+      setBalance(0);
     } finally {
       setIsLoadingBalance(false);
     }
@@ -97,17 +68,17 @@ const Wallet: React.FC<WalletProps> = () => {
   const fetchTransactions = React.useCallback(async () => {
     setIsLoadingTx(true);
     try {
-      const res = await fetch(`${API_BASE}/billing/transactions`, {
+      const res = await fetch(`${WALLET_API}/billing/transactions`, {
         headers: getAuthHeader(),
       });
       const data = await res.json();
       if (res.ok && Array.isArray(data)) {
         setTransactions(data);
       } else {
-        setTransactions(MOCK_TRANSACTIONS);
+        setTransactions([]);
       }
     } catch (e) {
-      setTransactions(MOCK_TRANSACTIONS);
+      setTransactions([]);
     } finally {
       setIsLoadingTx(false);
     }
@@ -142,7 +113,7 @@ const Wallet: React.FC<WalletProps> = () => {
   const handleTopup = async () => {
     setIsProcessing(true);
     try {
-      const res = await fetch(`${API_BASE}/billing/topup`, {
+      const res = await fetch(`${WALLET_API}/billing/topup`, {
         method: 'POST',
         headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: parseFloat(topupAmount) }),
@@ -164,7 +135,7 @@ const Wallet: React.FC<WalletProps> = () => {
   const handleManageBilling = async () => {
     setIsProcessing(true);
     try {
-      const res = await fetch(`${API_BASE}/billing/portal`, {
+      const res = await fetch(`${WALLET_API}/billing/portal`, {
         headers: getAuthHeader(),
       });
       const data = await res.json();

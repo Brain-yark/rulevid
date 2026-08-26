@@ -49,10 +49,58 @@ export class StripeService {
   }
 
   /**
+   * Create a Checkout Session for an event ticket.
+   * Metadata (userId, eventId, ticketId, type: 'event_ticket') is used by webhook handler.
+   */
+  async createTicketCheckoutSession(
+    userId: string,
+    eventId: string,
+    ticketId: string,
+    eventTitle: string,
+    priceCents: number,
+    successUrl: string,
+    cancelUrl: string
+  ) {
+    try {
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `Ticket: ${eventTitle}`,
+                description: `Live access ticket to "${eventTitle}" on SVSM Live`,
+              },
+              unit_amount: priceCents, // In cents
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata: {
+          userId,
+          eventId,
+          ticketId,
+          type: 'event_ticket',
+          priceCents: priceCents.toString(),
+        },
+      });
+
+      return session;
+    } catch (error) {
+      console.error('[Stripe] Ticket session creation error:', error);
+      throw new Error('Failed to create Stripe ticket checkout session');
+    }
+  }
+
+  /**
    * Verify and parse a Stripe webhook event from the raw request body and signature.
    * Throws if the signature is invalid — caller should return 400.
    */
-  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
+  constructWebhookEvent(rawBody: Buffer, signature: string): any {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
       throw new Error('STRIPE_WEBHOOK_SECRET is not configured');

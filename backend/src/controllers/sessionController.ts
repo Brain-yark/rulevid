@@ -97,6 +97,13 @@ export const joinSession = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
+    if (session.status === 'ended') {
+      return res.status(400).json({
+        error: 'Session has ended',
+        message: 'This session has concluded and cannot be entered or restarted.'
+      });
+    }
+
     const tokenData = generateAgoraToken(session.channelName, userId, 'publisher');
 
     // ─── Agora Chat Integration ─────────────────────────────────────────────

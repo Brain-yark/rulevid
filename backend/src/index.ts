@@ -4,23 +4,17 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import pinoHttp from 'pino-http';
-import pino from 'pino';
 import authRoutes from './routes/authRoute';
 import sessionRoutes from './routes/sessionRoute';
 import billingRoutes, { stripeWebhookHandler } from './routes/billingRoute';
+import eventRoutes from './routes/eventRoute';
+import adminRoutes from './routes/adminRoute';
+import { ensureSuperAdmin } from './controllers/adminController';
 import { usageSyncJob } from './jobs/usageSync';
 import { initSocketService } from './services/socketService';
+import { logger } from './logger';
 
 const IS_PROD = process.env.NODE_ENV === 'production';
-
-// ─── Structured Logger ────────────────────────────────────────────────────────
-export const logger = pino({
-  level: IS_PROD ? 'info' : 'debug',
-  transport: IS_PROD ? undefined : {
-    target: 'pino-pretty',
-    options: { colorize: true, translateTime: 'SYS:standard', ignore: 'pid,hostname' },
-  },
-});
 
 const app = express();
 const httpServer = createServer(app);
@@ -37,9 +31,10 @@ app.use(pinoHttp({
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const ALLOWED_ORIGINS = Array.from(new Set([FRONTEND_URL, 'http://localhost:5173', 'http://localhost:8080']));
 app.use(cors({
-  origin: [FRONTEND_URL, 'http://localhost:5173', 'http://localhost:8080'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: ALLOWED_ORIGINS,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 }));
@@ -47,7 +42,7 @@ app.use(cors({
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 const io = new Server(httpServer, {
   cors: {
-    origin: [FRONTEND_URL, 'http://localhost:5173', 'http://localhost:8080'],
+    origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -67,7 +62,9 @@ app.use(express.json());
 // ─── Routes ──────────────────────────────────────────────────────────────────
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/sessions', sessionRoutes);
+app.use('/api/v1/events', eventRoutes);
 app.use('/api/v1/billing', billingRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
@@ -84,8 +81,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 // ─── Start ─────────────────────────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
   logger.info(`[Backend] Server listening on port ${PORT}`);
   logger.info(`[Backend] WebSocket initialized | CORS: ${FRONTEND_URL} | Env: ${IS_PROD ? 'production' : 'development'}`);
+  await ensureSuperAdmin();
   usageSyncJob.start();
 });

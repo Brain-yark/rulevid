@@ -1,53 +1,123 @@
-import React from 'react';
-import { LogOut, LayoutDashboard, Wallet as WalletIcon, Video } from 'lucide-react';
+import React, { useState } from 'react';
+import { LogOut, LayoutDashboard, Wallet as WalletIcon, Video, Ticket, ShieldAlert } from 'lucide-react';
+import { ConfirmationModal } from './ConfirmationModal';
+import type { UserRole } from '../../../shared/types';
+
+interface LayoutUser {
+  id?: string;
+  email: string;
+  name?: string;
+  role?: UserRole;
+}
 
 interface LayoutProps {
-  user: { email: string } | null;
+  user: LayoutUser | null;
   currentPage?: string;
   onLogout: () => void;
-  onNavigate: (page: 'dashboard' | 'wallet') => void;
+  onNavigate: (page: 'events' | 'dashboard' | 'wallet' | 'super-admin') => void;
   children: React.ReactNode;
 }
 
 const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate, children }) => {
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const role = user?.role || 'user';
+  const isHost = role === 'host' || role === 'admin' || role === 'moderator' || role === 'super_admin';
+  const isAdmin = role === 'admin' || role === 'super_admin';
+
+  const handleConfirmLogout = () => {
+    setShowLogoutConfirm(false);
+    onLogout();
+  };
+
   return (
     <div className="layout-container">
       <nav className="glass sticky-nav">
         <div className="nav-content">
-          <div className="logo" onClick={() => onNavigate('dashboard')} style={{ cursor: 'pointer' }}>
+          <div className="logo" onClick={() => onNavigate('events')} style={{ cursor: 'pointer' }}>
             <Video className="logo-icon" />
-            <span>SVSM Platform</span>
+            <span>SVSM Live 2.0</span>
           </div>
-          
+
           <div className="nav-links">
-            <button 
-              onClick={() => onNavigate('dashboard')} 
-              className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}
+            <button
+              onClick={() => onNavigate('events')}
+              className={`nav-link ${currentPage === 'events' ? 'active' : ''}`}
             >
-              <LayoutDashboard size={20} />
-              <span>Dashboard</span>
+              <Ticket size={18} />
+              <span>Browse Events</span>
             </button>
-            <button 
-              onClick={() => onNavigate('wallet')} 
+
+            {isHost && (
+              <button
+                onClick={() => onNavigate('dashboard')}
+                className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}
+              >
+                <LayoutDashboard size={18} />
+                <span>Host Studio</span>
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => onNavigate('super-admin')}
+                className={`nav-link ${currentPage === 'super-admin' ? 'active super-admin-active' : ''}`}
+              >
+                <ShieldAlert size={18} className="nav-shield-icon" />
+                <span>Super Admin</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => onNavigate('wallet')}
               className={`nav-link ${currentPage === 'wallet' ? 'active' : ''}`}
             >
-              <WalletIcon size={20} />
+              <WalletIcon size={18} />
               <span>Wallet</span>
             </button>
           </div>
 
           <div className="user-profile">
-            <span className="user-email">{user?.email}</span>
-            <button onClick={onLogout} className="logout-btn" title="Logout">
-              <LogOut size={20} />
+            <div className="user-info-group">
+              <div className="user-name-row">
+                <span className="user-name">{user?.name || user?.email.split('@')[0]}</span>
+                <span className={`user-role-pill role-${role}`}>
+                  {role === 'host'
+                    ? 'HOST'
+                    : role === 'admin'
+                    ? 'ADMIN'
+                    : role === 'moderator'
+                    ? 'MOD'
+                    : role === 'super_admin'
+                    ? 'SUPER ADMIN'
+                    : 'ATTENDEE'}
+                </span>
+              </div>
+              <span className="user-email">{user?.email}</span>
+            </div>
+            <button
+              onClick={() => setShowLogoutConfirm(true)}
+              className="logout-btn"
+              title="Sign Out"
+            >
+              <LogOut size={18} />
             </button>
           </div>
         </div>
       </nav>
 
-      <main className="main-content animate-fade-in">
-        {children}
-      </main>
+      <main className="main-content animate-fade-in">{children}</main>
+
+      <ConfirmationModal
+        isOpen={showLogoutConfirm}
+        title="Sign Out of SVSM"
+        message="Are you sure you want to end your current session? You will need to log back in to access live rooms and your dashboard."
+        confirmText="Sign Out"
+        cancelText="Stay Signed In"
+        variant="danger"
+        iconType="logout"
+        onConfirm={handleConfirmLogout}
+        onCancel={() => setShowLogoutConfirm(false)}
+      />
 
       <style>{`
         .layout-container {
@@ -78,9 +148,10 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
           display: flex;
           align-items: center;
           gap: 0.75rem;
-          font-weight: 700;
-          font-size: 1.2rem;
+          font-weight: 800;
+          font-size: 1.25rem;
           color: var(--primary);
+          letter-spacing: -0.01em;
         }
 
         .logo-icon {
@@ -89,7 +160,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
 
         .nav-links {
           display: flex;
-          gap: 1.5rem;
+          gap: 0.75rem;
         }
 
         .nav-link {
@@ -97,12 +168,13 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
           align-items: center;
           gap: 0.5rem;
           background: none;
-          border: none;
+          border: 1px solid transparent;
           color: var(--text-muted);
           cursor: pointer;
           font-weight: 500;
+          font-size: 0.9rem;
           transition: var(--transition-fast);
-          padding: 0.5rem 1rem;
+          padding: 0.55rem 1rem;
           border-radius: 12px;
         }
 
@@ -113,8 +185,18 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
 
         .nav-link.active {
           color: white;
-          background: rgba(99, 102, 241, 0.2);
+          background: rgba(99, 102, 241, 0.18);
           border: 1px solid rgba(99, 102, 241, 0.4);
+        }
+
+        .nav-link.super-admin-active {
+          background: rgba(244, 63, 94, 0.18);
+          border: 1px solid rgba(244, 63, 94, 0.4);
+          color: #fecdd3;
+        }
+
+        .nav-shield-icon {
+          color: #f43f5e;
         }
 
         .user-profile {
@@ -123,24 +205,80 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
           gap: 1rem;
         }
 
-        .user-email {
+        .user-info-group {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 0.15rem;
+        }
+
+        .user-name-row {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+        }
+
+        .user-name {
           font-size: 0.9rem;
+          font-weight: 600;
+          color: var(--text-main);
+        }
+
+        .user-role-pill {
+          font-size: 0.65rem;
+          font-weight: 800;
+          padding: 0.15rem 0.45rem;
+          border-radius: 6px;
+          letter-spacing: 0.05em;
+        }
+
+        .role-host {
+          background: rgba(99, 102, 241, 0.2);
+          color: #a5b4fc;
+          border: 1px solid rgba(99, 102, 241, 0.35);
+        }
+
+        .role-user {
+          background: rgba(16, 185, 129, 0.15);
+          color: #6ee7b7;
+          border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .role-moderator {
+          background: rgba(59, 130, 246, 0.2);
+          color: #93c5fd;
+          border: 1px solid rgba(59, 130, 246, 0.35);
+        }
+
+        .role-admin,
+        .role-super_admin {
+          background: rgba(244, 63, 94, 0.2);
+          color: #fda4af;
+          border: 1px solid rgba(244, 63, 94, 0.35);
+        }
+
+        .user-email {
+          font-size: 0.75rem;
           color: var(--text-muted);
         }
 
         .logout-btn {
-          background: none;
-          border: none;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid var(--glass-border);
           color: var(--text-muted);
           cursor: pointer;
           transition: var(--transition-fast);
           padding: 0.5rem;
-          border-radius: 8px;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .logout-btn:hover {
           color: var(--accent);
-          background: rgba(244, 63, 94, 0.1);
+          background: rgba(244, 63, 94, 0.15);
+          border-color: rgba(244, 63, 94, 0.3);
         }
 
         .main-content {
@@ -149,6 +287,15 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
           max-width: 1200px;
           margin: 0 auto;
           width: 100%;
+        }
+
+        @media (max-width: 768px) {
+          .user-info-group {
+            display: none;
+          }
+          .nav-links span {
+            display: none;
+          }
         }
       `}</style>
     </div>

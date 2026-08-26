@@ -3,13 +3,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../db';
 import { billingService } from '../services/billingService';
-import { AuthResponse } from '../../../shared/types';
+import { AuthResponse, UserRole } from '../../../shared/types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
 export const register = async (req: Request, res: Response) => {
   try {
-    const { email, password, companyName } = req.body;
+    const { email, password, name, companyName, role = 'user' } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -19,7 +19,16 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    // Only 'user' and 'host' are self-registerable roles.
+    // Moderators must be assigned by a host from the dashboard.
+    // Admin/super_admin are system-assigned or seeded.
+    const requestedRole = (req.body.role || 'user').toString().toLowerCase().trim();
+    const validSelfRegisterRoles: UserRole[] = ['user', 'host'];
+    const assignedRole: UserRole = (validSelfRegisterRoles as string[]).includes(requestedRole)
+      ? (requestedRole as UserRole)
+      : 'user';
+
+    const existingUser = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (existingUser) {
       return res.status(400).json({ error: 'Email is already taken' });
     }
@@ -27,34 +36,49 @@ export const register = async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: {
-        email,
+        email: email.toLowerCase().trim(),
         passwordHash,
-        companyName,
+        name: name?.trim() || null,
+        role: assignedRole,
+        companyName: companyName?.trim() || null,
+        status: 'active',
+        emailVerified: false,
+        lastLoginAt: new Date(),
       },
     });
 
-    // ── Provision Lago customer + wallet (non-blocking — registration succeeds even on failure) ──
+    // Provision Lago customer + wallet if host or requested
     let finalWalletId: string | null = null;
-    try {
-      await billingService.createLagoCustomer(user.id, user.email);
-      finalWalletId = await billingService.createLagoWallet(user.id);
-      if (finalWalletId) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { walletId: finalWalletId },
-        });
-        console.log(`[Auth] Lago provisioning complete for ${user.email}`);
+    if (assignedRole === 'host') {
+      try {
+        await billingService.createLagoCustomer(user.id, user.email);
+        finalWalletId = await billingService.createLagoWallet(user.id);
+        if (finalWalletId) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { walletId: finalWalletId },
+          });
+          console.log(`[Auth] Lago provisioning complete for host ${user.email}`);
+        }
+      } catch (lagoErr) {
+        console.error('[Auth] Lago provisioning failed (non-fatal):', lagoErr);
       }
-    } catch (lagoErr) {
-      console.error('[Auth] Lago provisioning failed (non-fatal):', lagoErr);
     }
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     const authResponse: AuthResponse = {
       user: {
         id: user.id,
         email: user.email,
+        name: user.name || undefined,
+        role: user.role as UserRole,
+        emailVerified: user.emailVerified,
+        lastLoginAt: user.lastLoginAt?.toISOString(),
         companyName: user.companyName || undefined,
         pricingTier: user.pricingTier,
         status: user.status,
@@ -78,9 +102,13 @@ export const login = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -88,16 +116,29 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    const token = jwt.sign(
+      { userId: updatedUser.id, email: updatedUser.email, role: updatedUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     const authResponse: AuthResponse = {
       user: {
-        id: user.id,
-        email: user.email,
-        companyName: user.companyName || undefined,
-        pricingTier: user.pricingTier,
-        status: user.status,
-        walletId: user.walletId || undefined,
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name || undefined,
+        role: updatedUser.role as UserRole,
+        emailVerified: updatedUser.emailVerified,
+        lastLoginAt: updatedUser.lastLoginAt?.toISOString(),
+        companyName: updatedUser.companyName || undefined,
+        pricingTier: updatedUser.pricingTier,
+        status: updatedUser.status,
+        walletId: updatedUser.walletId || undefined,
       },
       token,
     };
@@ -111,7 +152,6 @@ export const login = async (req: Request, res: Response) => {
 
 export const getMe = async (req: Request, res: Response) => {
   try {
-    // Extract and verify token (reusing authMiddleware pattern)
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -130,10 +170,18 @@ export const getMe = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'Account suspended' });
+    }
+
     const authResponse: AuthResponse = {
       user: {
         id: user.id,
         email: user.email,
+        name: user.name || undefined,
+        role: user.role as UserRole,
+        emailVerified: user.emailVerified,
+        lastLoginAt: user.lastLoginAt?.toISOString(),
         companyName: user.companyName || undefined,
         pricingTier: user.pricingTier,
         status: user.status,
@@ -148,3 +196,4 @@ export const getMe = async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
+
