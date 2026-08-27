@@ -1,7 +1,12 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
+
+# Configure npm timeouts & retries for network resilience
+RUN npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000
 
 # Copy root workspace and shared modules
 COPY package*.json ./
@@ -9,7 +14,7 @@ COPY shared ./shared
 
 # Install frontend dependencies
 COPY frontend/package*.json ./frontend/
-RUN npm install --prefix frontend
+RUN npm install --prefix frontend --no-audit
 
 # Copy frontend source code
 COPY frontend ./frontend

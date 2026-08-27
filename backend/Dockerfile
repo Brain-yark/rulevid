@@ -1,7 +1,12 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
+
+# Configure npm timeouts & retries for network resilience
+RUN npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000
 
 # Copy root workspace and shared modules
 COPY package*.json ./
@@ -9,7 +14,7 @@ COPY shared ./shared
 
 # Install backend dependencies
 COPY backend/package*.json ./backend/
-RUN npm install --prefix backend
+RUN npm install --prefix backend --no-audit
 
 # Copy backend sources and config
 COPY backend/src ./backend/src
@@ -26,7 +31,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # ─── Stage 2: Production Runtime ─────────────────────────────────────────────
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
