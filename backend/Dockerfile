@@ -16,13 +16,13 @@ COPY shared ./shared
 COPY backend/package*.json ./backend/
 RUN npm install --prefix backend --no-audit
 
-# Copy backend sources and config
-COPY backend/src ./backend/src
-COPY backend/prisma ./backend/prisma
-COPY backend/tsconfig.json ./backend/tsconfig.json
-COPY backend/tsconfig.build.json ./backend/tsconfig.build.json
+# Copy all backend files (src, prisma, prisma.config.ts, tsconfigs)
+COPY backend ./backend
 
 WORKDIR /app/backend
+
+# Provide dummy build-time DATABASE_URL for Prisma Client generation
+ENV DATABASE_URL="postgresql://postgres:postgres@localhost:5432/svsm_ci"
 
 # Generate Prisma client
 RUN npx prisma generate
@@ -40,6 +40,7 @@ COPY --from=builder /app/backend/node_modules ./node_modules
 COPY --from=builder /app/backend/package*.json ./
 COPY --from=builder /app/backend/dist ./dist
 COPY --from=builder /app/backend/prisma ./prisma
+COPY --from=builder /app/backend/prisma.config.ts ./prisma.config.ts
 
 ENV NODE_ENV=production
 ENV PORT=3001
