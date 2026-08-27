@@ -1,0 +1,157 @@
+name: CI/CD Pipeline - Quality, Security & Build Gates
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  # =========================================================================
+  # GATE 1: Security & Secrets Leak Prevention Guard
+  # =========================================================================
+  security-audit:
+    name: 🔒 Security & Secrets Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Check for Leaked Sensitive Files
+        run: |
+          echo "Scanning repository for accidentally committed sensitive keys or env files..."
+          FORBIDDEN_FILES=(
+            ".env"
+            "container_env.txt"
+            "rsa_key.txt"
+            "rsa_key_b64.txt"
+            "rsa_key_literal.txt"
+            "rsa_key_pkcs1_b64.txt"
+            "final_rsa_b64.txt"
+            "key_and_secret.txt"
+          )
+          LEAK_FOUND=0
+          for file in "${FORBIDDEN_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "::error file=$file::Forbidden sensitive credential file '$file' is present in repo tracking!"
+              LEAK_FOUND=1
+            fi
+          done
+          if [ $LEAK_FOUND -ne 0 ]; then
+            echo "Critical: Sensitive credential files detected in source control. Pipeline failed."
+            exit 1
+          fi
+          echo "✅ No sensitive credential files found in tracking."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+  # =========================================================================
+  # GATE 2: Database & Backend Quality Gate
+  # =========================================================================
+  backend-verification:
+    name: ⚙️ Backend & Database Verification
+    runs-on: ubuntu-latest
+    needs: security-audit
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Root & Backend Dependencies
+        run: |
+          npm ci || npm install
+          npm install --prefix backend
+
+      - name: Validate Prisma Schema
+        run: |
+          cd backend
+          npx prisma validate
+
+      - name: Generate Prisma Client
+        run: |
+          cd backend
+          npx prisma generate
+
+      - name: Backend TypeScript Static Type Check
+        run: |
+          cd backend
+          npx tsc --noEmit
+
+      - name: Compile Backend Production Bundle
+        run: |
+          npm run build --prefix backend
+
+  # =========================================================================
+  # GATE 3: Frontend Quality, Linting & Production Build Gate
+  # =========================================================================
+  frontend-verification:
+    name: 🎨 Frontend Linting & Build Verification
+    runs-on: ubuntu-latest
+    needs: security-audit
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Root & Frontend Dependencies
+        run: |
+          npm ci || npm install
+          npm install --prefix frontend
+
+      - name: Frontend Static Type Check
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Build Frontend Production Bundle (Vite)
+        run: |
+          npm run build --prefix frontend
+        env:
+          VITE_API_URL: 'http://localhost:3001'
+          VITE_AGORA_APP_ID: 'mock_app_id_for_ci_build'
+          VITE_AGORA_CHAT_APP_KEY: 'mock_chat_app_key'
+
+  # =========================================================================
+  # GATE 4: Unified CI Quality Pass / Status Badge
+  # =========================================================================
+  ci-status:
+    name: 🚀 CI/CD Pipeline Quality Gate Summary
+    runs-on: ubuntu-latest
+    needs: [backend-verification, frontend-verification]
+    steps:
+      - name: Pipeline Success Confirmation
+        run: |
+          echo "================================================================"
+          echo "🎉 ALL CI/CD GATES PASSED SUCCESSFULLY!"
+          echo "✓ Security & Secrets Audit"
+          echo "✓ Prisma Schema Validation & Client Generation"
+          echo "✓ Backend TypeScript Typecheck & Compilation"
+          echo "✓ Frontend Typecheck & Production Vite Bundle"
+          echo "================================================================"

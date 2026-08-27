@@ -66,18 +66,34 @@ export const createSession = async (req: Request, res: Response) => {
 export const getSessions = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.userId;
-    const { search, status, excludeStatus } = req.query;
+    const userRole = (req as any).user?.role || 'user';
+    const { search, status, excludeStatus, view } = req.query;
+
+    const whereClause: any = {};
+
+    if (view === 'all' || view === 'active' || userRole === 'user') {
+      // Public / attendee view: return active live sessions
+      whereClause.status = status ? (status as string) : 'active';
+    } else {
+      // Host personal studio view: returns their own sessions
+      whereClause.facilitatorId = userId;
+      if (status) {
+        whereClause.status = status as string;
+      } else if (excludeStatus) {
+        whereClause.status = { not: excludeStatus as string };
+      }
+    }
+
+    if (search) {
+      whereClause.title = { contains: search as string, mode: 'insensitive' };
+    }
 
     const sessions = await prisma.session.findMany({
-      where: {
-        facilitatorId: userId,
-        // If a specific status filter is requested, use it; otherwise exclude the specified status
-        status: status
-          ? (status as string)
-          : excludeStatus
-            ? { not: excludeStatus as string }
-            : undefined,
-        title: search ? { contains: search as string, mode: 'insensitive' } : undefined,
+      where: whereClause,
+      include: {
+        facilitator: {
+          select: { id: true, email: true, name: true, companyName: true }
+        }
       },
       orderBy: { createdAt: 'desc' },
     });

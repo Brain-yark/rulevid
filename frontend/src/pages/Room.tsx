@@ -237,38 +237,6 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(true);
 
-  const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Fallback local video preview for demo / offline test mode
-  useEffect(() => {
-    let activeStream: MediaStream | null = null;
-    if (isCameraOn) {
-      navigator.mediaDevices?.getUserMedia({ video: true, audio: false })
-        .then((stream) => {
-          activeStream = stream;
-          setLocalVideoStream(stream);
-        })
-        .catch((err) => {
-          console.warn('[Room] Local camera preview fallback notice:', err);
-        });
-    } else {
-      setLocalVideoStream(null);
-    }
-
-    return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [isCameraOn]);
-
-  useEffect(() => {
-    if (localVideoRef.current && localVideoStream) {
-      localVideoRef.current.srcObject = localVideoStream;
-    }
-  }, [localVideoStream]);
-
   const isAgoraReady = Boolean(APP_ID && config.token && config.channel);
 
   // Agora Hooks
@@ -522,6 +490,77 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
     setIsSharing(!isSharing);
   };
 
+  const cleanupTracksAndLeave = async () => {
+    try {
+      if (localCameraTrack) {
+        localCameraTrack.stop();
+        localCameraTrack.close();
+      }
+      if (localMicrophoneTrack) {
+        localMicrophoneTrack.stop();
+        localMicrophoneTrack.close();
+      }
+      if (screenTrack) {
+        if (Array.isArray(screenTrack)) {
+          screenTrack.forEach((t) => {
+            t.stop();
+            t.close();
+          });
+        } else {
+          screenTrack.stop();
+          screenTrack.close();
+        }
+      }
+      if (mainClient) {
+        try {
+          await mainClient.unpublish();
+          await mainClient.leave();
+        } catch {
+          // ignore already left
+        }
+      }
+      if (chatConnRef.current) {
+        chatConnRef.current.close();
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    } catch (err) {
+      console.error('[Room] Track cleanup notice:', err);
+    }
+    onExit();
+  };
+
+  // Cleanup tracks when component unmounts
+  useEffect(() => {
+    return () => {
+      try {
+        if (localCameraTrack) {
+          localCameraTrack.stop();
+          localCameraTrack.close();
+        }
+        if (localMicrophoneTrack) {
+          localMicrophoneTrack.stop();
+          localMicrophoneTrack.close();
+        }
+        if (screenTrack) {
+          if (Array.isArray(screenTrack)) {
+            screenTrack.forEach((t) => {
+              t.stop();
+              t.close();
+            });
+          } else {
+            screenTrack.stop();
+            screenTrack.close();
+          }
+        }
+        mainClient?.leave().catch(() => null);
+      } catch {
+        // ignore
+      }
+    };
+  }, [localCameraTrack, localMicrophoneTrack, screenTrack, mainClient]);
+
   const handleEndSessionForAll = async () => {
     if (!window.confirm('Are you sure you want to end this live session for everyone?')) return;
     const authToken = localStorage.getItem('auth_token');
@@ -540,11 +579,11 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
     } catch (e) {
       console.error('Failed to end session/event on backend:', e);
     }
-    onExit();
+    await cleanupTracksAndLeave();
   };
 
-  const handleLeaveRoom = () => {
-    onExit();
+  const handleLeaveRoom = async () => {
+    await cleanupTracksAndLeave();
   };
 
   return (
@@ -622,14 +661,6 @@ const ActiveRoom: React.FC<{config: AgoraConfig, sessionId: string, eventId?: st
                     track={localCameraTrack} 
                     play={true} 
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : isCameraOn && localVideoStream ? (
-                  <video 
-                    ref={localVideoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted 
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} 
                   />
                 ) : (
                   <div className="video-placeholder">

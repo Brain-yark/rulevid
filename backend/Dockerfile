@@ -1,21 +1,23 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
-WORKDIR /workspace
+WORKDIR /app
 
-# Copy shared types first (needed for compilation)
+# Copy root workspace and shared modules
+COPY package*.json ./
 COPY shared ./shared
 
 # Install backend dependencies
-WORKDIR /workspace/backend
-COPY backend/package*.json ./
-RUN npm install
+COPY backend/package*.json ./backend/
+RUN npm install --prefix backend
 
-# Copy backend source and configs
-COPY backend/src ./src
-COPY backend/prisma ./prisma
-COPY backend/tsconfig.json ./tsconfig.json
-COPY backend/tsconfig.build.json ./tsconfig.build.json
+# Copy backend sources and config
+COPY backend/src ./backend/src
+COPY backend/prisma ./backend/prisma
+COPY backend/tsconfig.json ./backend/tsconfig.json
+COPY backend/tsconfig.build.json ./backend/tsconfig.build.json
+
+WORKDIR /app/backend
 
 # Generate Prisma client
 RUN npx prisma generate
@@ -28,13 +30,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy only what we need to run
-COPY --from=builder /workspace/backend/node_modules ./node_modules
-COPY --from=builder /workspace/backend/package*.json ./
-COPY --from=builder /workspace/backend/dist ./dist
-COPY --from=builder /workspace/backend/prisma ./prisma
+# Copy runtime assets
+COPY --from=builder /app/backend/node_modules ./node_modules
+COPY --from=builder /app/backend/package*.json ./
+COPY --from=builder /app/backend/dist ./dist
+COPY --from=builder /app/backend/prisma ./prisma
 
+ENV NODE_ENV=production
+ENV PORT=3001
 EXPOSE 3001
 
-# Run migrations then start the compiled server
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/index.js"]
+# Run migrations and start compiled server
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/backend/src/index.js"]
