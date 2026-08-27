@@ -8,9 +8,12 @@ RUN npm config set fetch-retry-maxtimeout 120000 && \
     npm config set fetch-retries 5 && \
     npm config set fetch-retry-mintimeout 20000
 
-# Copy root workspace and shared modules
+# Copy root workspace manifests and shared modules
 COPY package*.json ./
 COPY shared ./shared
+
+# Install ROOT dependencies first (zod lives here, used by shared/schemas.ts)
+RUN npm install --no-audit
 
 # Install backend dependencies
 COPY backend/package*.json ./backend/
@@ -36,7 +39,8 @@ FROM node:22-alpine
 WORKDIR /app
 
 # Copy runtime assets
-COPY --from=builder /app/backend/node_modules ./node_modules
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/backend/package*.json ./
 COPY --from=builder /app/backend/dist ./dist
 COPY --from=builder /app/backend/prisma ./prisma
@@ -47,4 +51,4 @@ ENV PORT=3001
 EXPOSE 3001
 
 # Run migrations and start compiled server
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/backend/src/index.js"]
+CMD ["sh", "-c", "./backend/node_modules/.bin/prisma migrate deploy && node dist/backend/src/index.js"]

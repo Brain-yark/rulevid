@@ -1,0 +1,42 @@
+# ─── Exclude all node_modules to keep build context small ────────────────────
+node_modules
+backend/node_modules
+frontend/node_modules
+
+# ─── Exclude build artifacts ──────────────────────────────────────────────────
+backend/dist
+frontend/dist
+dist
+
+# ─── Exclude git and CI files ────────────────────────────────────────────────
+.git
+.gitignore
+.github
+
+# ─── Exclude local env files ──────────────────────────────────────────────────
+.env
+.env.*
+backend/.env
+frontend/.env
+
+# ─── Exclude logs and debug files ────────────────────────────────────────────
+*.log
+npm-debug.log*
+*.txt
+key_and_secret.txt
+rsa_key*.txt
+final_rsa_b64.txt
+container_env.txt
+
+# ─── Exclude documentation files ─────────────────────────────────────────────
+*.md
+README.md.txt
+
+# ─── Exclude local test and scratch scripts ───────────────────────────────────
+backend/scratch.ts
+backend/test-db.ts
+backend/test_slice.ts
+backend/fix-db.js
+backend/seed.js
+backend/seed.ts
+backend/scripts
