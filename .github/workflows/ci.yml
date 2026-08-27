@@ -18,7 +18,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.x'
+  DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/svsm_ci'
+  JWT_SECRET: 'ci_mock_jwt_secret_for_build_testing_only'
+  AGORA_APP_ID: 'ci_mock_agora_app_id'
+  AGORA_APP_CERTIFICATE: 'ci_mock_agora_certificate'
+  VITE_API_URL: 'http://localhost:3001'
+  VITE_AGORA_APP_ID: 'ci_mock_agora_app_id'
+  VITE_AGORA_CHAT_APP_KEY: 'ci_mock_chat_app_key'
 
 jobs:
   # =========================================================================
@@ -88,11 +95,15 @@ jobs:
         run: |
           cd backend
           npx prisma validate
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Generate Prisma Client
         run: |
           cd backend
           npx prisma generate
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Backend TypeScript Static Type Check
         run: |
@@ -134,9 +145,9 @@ jobs:
         run: |
           npm run build --prefix frontend
         env:
-          VITE_API_URL: 'http://localhost:3001'
-          VITE_AGORA_APP_ID: 'mock_app_id_for_ci_build'
-          VITE_AGORA_CHAT_APP_KEY: 'mock_chat_app_key'
+          VITE_API_URL: ${{ env.VITE_API_URL }}
+          VITE_AGORA_APP_ID: ${{ env.VITE_AGORA_APP_ID }}
+          VITE_AGORA_CHAT_APP_KEY: ${{ env.VITE_AGORA_CHAT_APP_KEY }}
 
   # =========================================================================
   # GATE 4: Docker Container Image Build Gate
