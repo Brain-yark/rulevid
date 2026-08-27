@@ -113,6 +113,8 @@ jobs:
       - name: Compile Backend Production Bundle
         run: |
           npm run build --prefix backend
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
   # =========================================================================
   # GATE 3: Frontend Quality, Linting & Production Build Gate
