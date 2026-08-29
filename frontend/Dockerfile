@@ -14,7 +14,7 @@ COPY shared ./shared
 
 # Install frontend dependencies
 COPY frontend/package*.json ./frontend/
-RUN npm install --prefix frontend --no-audit
+RUN npm install --prefix frontend --ignore-scripts --no-audit
 
 # Copy frontend source code
 COPY frontend ./frontend
