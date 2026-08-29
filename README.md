@@ -334,6 +334,8 @@ docker compose up -d --build
 
 ## 🛡️ Security & Production Hardening
 
+See the [Security Audit](SECURITY_AUDIT.md) for the current vulnerability findings, remediation order, and verification checklist.
+
 - **JWT Expiration & Verification:** Short-lived access tokens with cryptographic verification on all authenticated routes.
 - **Rate Limiting:** Protects auth endpoints against brute-force attacks via `express-rate-limit`.
 - **Server-Authoritative Time Windows:** Scheduled event start times cannot be bypassed by manipulating client clocks.
