@@ -88,8 +88,8 @@ jobs:
 
       - name: Install Root & Backend Dependencies
         run: |
-          npm ci || npm install
-          npm install --prefix backend
+          npm ci --ignore-scripts
+          npm ci --prefix backend --ignore-scripts
 
       - name: Validate Prisma Schema
         run: |
@@ -135,8 +135,8 @@ jobs:
 
       - name: Install Root & Frontend Dependencies
         run: |
-          npm ci || npm install
-          npm install --prefix frontend
+          npm ci --ignore-scripts
+          npm ci --prefix frontend --ignore-scripts
 
       - name: Frontend Static Type Check
         run: |
