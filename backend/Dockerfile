@@ -13,11 +13,12 @@ COPY package*.json ./
 COPY shared ./shared
 
 # Install ROOT dependencies first (zod lives here, used by shared/schemas.ts)
-RUN npm install --no-audit
+# --ignore-scripts prevents postinstall from running (which needs backend/frontend package.json)
+RUN npm install --ignore-scripts --no-audit
 
 # Install backend dependencies
 COPY backend/package*.json ./backend/
-RUN npm install --prefix backend --no-audit
+RUN npm install --prefix backend --ignore-scripts --no-audit
 
 # Copy all backend files (src, prisma, prisma.config.ts, tsconfigs)
 COPY backend ./backend
