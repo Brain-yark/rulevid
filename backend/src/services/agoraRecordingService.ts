@@ -1,30 +1,53 @@
 import axios from 'axios';
 
-const AGORA_APP_ID = process.env.AGORA_APP_ID!;
-const CUSTOMER_ID = process.env.AGORA_CUSTOMER_ID!;
-const CUSTOMER_CERTIFICATE = process.env.AGORA_CUSTOMER_CERTIFICATE!;
+const AGORA_APP_ID = process.env.AGORA_APP_ID;
+const CUSTOMER_ID = process.env.AGORA_CUSTOMER_ID;
+const CUSTOMER_CERTIFICATE = process.env.AGORA_CUSTOMER_CERTIFICATE;
 
-// Basic Auth header for Agora Console API
+const RECORDING_BASE =
+  `https://api.agora.io/v1/apps/${AGORA_APP_ID}/cloud_recording`;
+
 const getAuthHeader = () => {
-  const credentials = Buffer.from(`${CUSTOMER_ID}:${CUSTOMER_CERTIFICATE}`).toString('base64');
-  return { Authorization: `Basic ${credentials}` };
+  if (!CUSTOMER_ID || !CUSTOMER_CERTIFICATE) {
+    throw new Error('Agora Customer ID/Certificate not configured');
+  }
+
+  const credentials = Buffer
+    .from(`${CUSTOMER_ID}:${CUSTOMER_CERTIFICATE}`)
+    .toString('base64');
+
+  return {
+    Authorization: `Basic ${credentials}`,
+    'Content-Type': 'application/json',
+  };
 };
 
-const RECORDING_BASE = `https://api.agora.io/v1/apps/${AGORA_APP_ID}/cloud_recording`;
-
 class AgoraRecordingService {
+
   private isConfigured(): boolean {
-    return !!(AGORA_APP_ID && CUSTOMER_ID && CUSTOMER_CERTIFICATE);
+    return Boolean(
+      AGORA_APP_ID &&
+      CUSTOMER_ID &&
+      CUSTOMER_CERTIFICATE
+    );
   }
 
   /**
-   * Step 1: Acquire a resource ID before starting a recording.
+   * Acquire a recording resource.
    */
-  async acquireResource(channelName: string, uid: string): Promise<string | null> {
+  async acquireResource(
+    channelName: string,
+    uid: string
+  ): Promise<string | null> {
+
     if (!this.isConfigured()) {
-      console.warn('[Recording] Agora credentials not configured — skipping recording');
+      console.warn(
+        '[Recording] Agora recording credentials are not configured'
+      );
+
       return null;
     }
+
     try {
       const response = await axios.post(
         `${RECORDING_BASE}/acquire`,
@@ -33,39 +56,69 @@ class AgoraRecordingService {
           uid,
           clientRequest: {
             resourceExpiredHour: 24,
-            scene: 0, // 0 = individual recording
+            scene: 0,
           },
         },
-        { headers: { ...getAuthHeader(), 'Content-Type': 'application/json' } }
+        {
+          headers: getAuthHeader(),
+        }
       );
-      return response.data.resourceId;
+
+      const resourceId = response.data?.resourceId;
+
+      if (!resourceId) {
+        console.error(
+          '[Recording] Agora did not return a resourceId',
+          response.data
+        );
+
+        return null;
+      }
+
+      console.log(
+        `[Recording] Resource acquired for ${channelName}`
+      );
+
+      return resourceId;
+
     } catch (error: any) {
-      console.error('[Recording] Failed to acquire resource:', error?.response?.data || error.message);
+      console.error(
+        '[Recording] Acquire failed:',
+        error?.response?.status,
+        error?.response?.data || error.message
+      );
+
       return null;
     }
   }
 
   /**
-   * Step 2: Start the cloud recording session.
-   * Returns { resourceId, sid } needed to stop later.
+   * Start cloud recording.
    */
   async startRecording(
     channelName: string,
     uid: string,
     token: string,
     resourceId: string,
-    storageConfig?: object
+    storageConfig?: Record<string, any>
   ): Promise<{ sid: string } | null> {
-    if (!this.isConfigured()) return null;
+
+    if (!this.isConfigured()) {
+      return null;
+    }
+
     try {
-      // Default to Agora's temporary storage if no S3 config provided
+
       const storage = storageConfig || {
-        vendor: 0, // Agora temporary storage
+        vendor: 0,
         region: 0,
         bucket: '',
         accessKey: '',
         secretKey: '',
-        fileNamePrefix: ['svsm', channelName],
+        fileNamePrefix: [
+          'rulevid',
+          channelName,
+        ],
       };
 
       const response = await axios.post(
@@ -73,40 +126,76 @@ class AgoraRecordingService {
         {
           cname: channelName,
           uid,
+
           clientRequest: {
             token,
+
             recordingConfig: {
-              maxIdleTime: 300, // Stop if no participants for 5 mins
-              streamTypes: 2,   // 0=audio, 1=video, 2=both
-              channelType: 0,   // 0=communication, 1=live
+              maxIdleTime: 300,
+              streamTypes: 2,
+              channelType: 0,
               videoStreamType: 0,
+
               transcodingConfig: {
-                width: 1280, height: 720, fps: 15, bitrate: 2000,
+                width: 1280,
+                height: 720,
+                fps: 15,
+                bitrate: 2000,
               },
             },
+
             storageConfig: storage,
           },
         },
-        { headers: { ...getAuthHeader(), 'Content-Type': 'application/json' } }
+        {
+          headers: getAuthHeader(),
+        }
       );
-      return { sid: response.data.sid };
+
+      const sid = response.data?.sid;
+
+      if (!sid) {
+        console.error(
+          '[Recording] Agora did not return SID',
+          response.data
+        );
+
+        return null;
+      }
+
+      console.log(
+        `[Recording] Started: channel=${channelName}, sid=${sid}`
+      );
+
+      return { sid };
+
     } catch (error: any) {
-      console.error('[Recording] Failed to start recording:', error?.response?.data || error.message);
+      console.error(
+        '[Recording] Start failed:',
+        error?.response?.status,
+        error?.response?.data || error.message
+      );
+
       return null;
     }
   }
 
   /**
-   * Step 3: Stop the recording and retrieve the file URL.
+   * Stop cloud recording.
    */
   async stopRecording(
     channelName: string,
     uid: string,
     resourceId: string,
     sid: string
-  ): Promise<string | null> {
-    if (!this.isConfigured()) return null;
+  ): Promise<any | null> {
+
+    if (!this.isConfigured()) {
+      return null;
+    }
+
     try {
+
       const response = await axios.post(
         `${RECORDING_BASE}/resourceid/${resourceId}/sid/${sid}/mode/mix/stop`,
         {
@@ -114,20 +203,29 @@ class AgoraRecordingService {
           uid,
           clientRequest: {},
         },
-        { headers: { ...getAuthHeader(), 'Content-Type': 'application/json' } }
+        {
+          headers: getAuthHeader(),
+        }
       );
 
-      const fileList = response.data?.serverResponse?.fileList;
-      if (fileList && fileList.length > 0) {
-        // Return the first recording file URL
-        return fileList[0].fileName || null;
-      }
-      return null;
+      console.log(
+        '[Recording] Stop response:',
+        JSON.stringify(response.data, null, 2)
+      );
+
+      return response.data;
+
     } catch (error: any) {
-      console.error('[Recording] Failed to stop recording:', error?.response?.data || error.message);
+      console.error(
+        '[Recording] Stop failed:',
+        error?.response?.status,
+        error?.response?.data || error.message
+      );
+
       return null;
     }
   }
 }
 
-export const agoraRecordingService = new AgoraRecordingService();
+export const agoraRecordingService =
+  new AgoraRecordingService();

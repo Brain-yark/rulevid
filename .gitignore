@@ -15,4 +15,9 @@ backend/test-db.ts
 backend/test_slice.ts
 backend/scratch.ts
 shared/*.js
+frontend/ssl/
+*.pem
+bugfix.txt
+frontend/parse_jsx.*
+scratch/
 

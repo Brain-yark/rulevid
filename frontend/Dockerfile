@@ -22,9 +22,9 @@ COPY frontend ./frontend
 WORKDIR /app/frontend
 
 # Build args for frontend environment variables during Vite build
-ARG VITE_API_URL
-ARG VITE_AGORA_APP_ID
-ARG VITE_AGORA_CHAT_APP_KEY
+ARG VITE_API_URL=""
+ARG VITE_AGORA_APP_ID=""
+ARG VITE_AGORA_CHAT_APP_KEY=""
 
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_AGORA_APP_ID=$VITE_AGORA_APP_ID
@@ -38,9 +38,17 @@ FROM nginx:alpine
 # Copy built SPA bundle to Nginx document root
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
+# Generate fallback self-signed SSL certificate for HTTPS support so nginx doesn't fail if ssl certs are not mounted
+RUN apk add --no-cache openssl && \
+    mkdir -p /etc/nginx/ssl && \
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout /etc/nginx/ssl/key.pem \
+      -out /etc/nginx/ssl/cert.pem \
+      -subj "/C=US/ST=Development/L=Local/O=Rulevid/CN=localhost"
+
 # SPA fallback routing config
 COPY frontend/nginx-spa.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 80 443
 
 CMD ["nginx", "-g", "daemon off;"]

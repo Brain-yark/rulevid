@@ -1,55 +1,67 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM node:22-alpine AS builder
+
+FROM node:22-bookworm AS builder
 
 WORKDIR /app
 
-# Configure npm timeouts & retries for network resilience
+# Configure npm network resilience
 RUN npm config set fetch-retry-maxtimeout 120000 && \
     npm config set fetch-retries 5 && \
     npm config set fetch-retry-mintimeout 20000
 
-# Copy root workspace manifests and shared modules
+# Root dependencies
 COPY package*.json ./
 COPY shared ./shared
 
-# Install ROOT dependencies first (zod lives here, used by shared/schemas.ts)
-# --ignore-scripts prevents postinstall from running (which needs backend/frontend package.json)
 RUN npm install --ignore-scripts --no-audit
 
-# Install backend dependencies
+# Backend dependencies
 COPY backend/package*.json ./backend/
+
 RUN npm install --prefix backend --ignore-scripts --no-audit
 
-# Copy all backend files (src, prisma, prisma.config.ts, tsconfigs)
+# Backend source
 COPY backend ./backend
 
 WORKDIR /app/backend
 
-# Provide dummy build-time DATABASE_URL for Prisma Client generation
+# Only used during Prisma generation
 ENV DATABASE_URL="postgresql://postgres:postgres@localhost:5432/svsm_ci"
 
-# Generate Prisma client
+# Generate Prisma Client
 RUN npx prisma generate
 
-# Compile TypeScript → dist/
+# Compile TypeScript + resolve aliases
 RUN npm run build
 
-# ─── Stage 2: Production Runtime ─────────────────────────────────────────────
-FROM node:22-alpine
+
+# ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
+
+FROM node:22-bookworm AS runtime
 
 WORKDIR /app
 
-# Copy runtime assets
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/backend/node_modules ./backend/node_modules
-COPY --from=builder /app/backend/package*.json ./
-COPY --from=builder /app/backend/dist ./dist
-COPY --from=builder /app/backend/prisma ./prisma
-COPY --from=builder /app/backend/prisma.config.ts ./prisma.config.ts
-
 ENV NODE_ENV=production
 ENV PORT=3001
+
+# IMPORTANT:
+# tsconfig outputs to /app/backend/dist because the build runs
+# from /app/backend.
+#
+# Copy that output into /app/dist in the runtime image.
+COPY --from=builder /app/backend/dist ./dist
+
+# Prisma files
+COPY --from=builder /app/backend/prisma ./backend/prisma
+COPY --from=builder /app/backend/prisma.config.ts ./backend/prisma.config.ts
+
+# Backend package metadata
+COPY --from=builder /app/backend/package*.json ./backend/
+
+# Put backend dependencies where Node can find them
+COPY --from=builder /app/backend/node_modules ./node_modules
+
 EXPOSE 3001
 
-# Run migrations and start compiled server
-CMD ["sh", "-c", "./backend/node_modules/.bin/prisma migrate deploy && node dist/backend/src/index.js"]
+# tsc-alias has already converted @shared/* imports.
+CMD ["sh", "-c", "npx prisma migrate deploy --config backend/prisma.config.ts && node dist/backend/src/index.js"]

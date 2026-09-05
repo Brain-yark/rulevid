@@ -36,9 +36,13 @@ const corsOriginValidator = (origin: string | undefined, callback: (err: Error |
   if (
     !origin ||
     origin.startsWith('http://localhost') ||
+    origin.startsWith('https://localhost') ||
     origin.startsWith('http://127.0.0.1') ||
+    origin.startsWith('https://127.0.0.1') ||
     origin.startsWith('http://192.168.') ||
+    origin.startsWith('https://192.168.') ||
     origin.startsWith('http://10.') ||
+    origin.startsWith('https://10.') ||
     origin.includes('ngrok') ||
     origin.includes('loca.lt') ||
     origin.includes('github.dev') ||

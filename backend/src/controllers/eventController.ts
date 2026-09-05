@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
-import { generateAgoraToken } from '../services/agoraTokenService';
+import { generateAgoraToken, generateStableAgoraUid } from '../services/agoraTokenService';
 import { agoraRecordingService } from '../services/agoraRecordingService';
 import { agoraChatService } from '../services/agoraChatService';
 import { stripeService } from '../services/stripeService';
@@ -471,57 +471,63 @@ export const startEvent = async (req: Request, res: Response) => {
     let session = event.session;
 
     if (!session) {
+      // Atomically check and create session inside a transaction to prevent race conditions
+      // (e.g. from React StrictMode or concurrent join requests)
       const channelName = `e_${event.id.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10)}_${Date.now()}`;
 
-      // Agora Chat setup
-      const chatUsername = getChatUsername(userEmail);
-      await agoraChatService.registerUser(chatUsername);
-      const agoraChatRoomId = await agoraChatService.createChatRoom(event.title, chatUsername);
+      const updatedEvent = await prisma.$transaction(async (tx) => {
+        const fresh = await tx.event.findUnique({
+          where: { id: id as string },
+          include: { session: true },
+        });
 
-      session = await prisma.session.create({
-        data: {
-          title: event.title,
-          channelName,
-          facilitatorId: userId,
-          status: 'active',
-          startedAt: new Date(),
-          agoraChatRoomId,
-        },
-      });
+        if (fresh?.session && fresh.session.status !== 'ended') {
+          return fresh;
+        }
 
-      await prisma.event.update({
-        where: { id: id as string },
-        data: {
-          sessionId: session.id,
-          status: 'live',
-        },
-      });
-    } else {
-      // Re-activate only if session is still in progress (not ended)
-      // If the previous session is ended, create a fresh one for a re-run
-      if (session.status === 'ended') {
-        const channelName = `e_${event.id.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10)}_${Date.now()}`;
-        const chatUsername = getChatUsername(userEmail);
-        await agoraChatService.registerUser(chatUsername);
-        const agoraChatRoomId = await agoraChatService.createChatRoom(event.title, chatUsername);
-
-        session = await prisma.session.create({
+        const newSession = await tx.session.create({
           data: {
             title: event.title,
             channelName,
             facilitatorId: userId,
             status: 'active',
             startedAt: new Date(),
-            agoraChatRoomId,
           },
         });
 
-        await prisma.event.update({
+        return tx.event.update({
           where: { id: id as string },
-          data: { sessionId: session.id, status: 'live' },
+          data: {
+            sessionId: newSession.id,
+            status: 'live',
+          },
+          include: { session: true },
+        });
+      });
+
+      session = updatedEvent.session!;
+
+      // Setup Agora Chat asynchronously without blocking stream initialization
+      try {
+        const chatUsername = getChatUsername(userEmail);
+        await agoraChatService.registerUser(chatUsername);
+        const agoraChatRoomId = await agoraChatService.createChatRoom(event.title, chatUsername);
+        if (agoraChatRoomId && session) {
+          session = await prisma.session.update({
+            where: { id: session.id },
+            data: { agoraChatRoomId },
+          });
+        }
+      } catch (chatErr) {
+        console.warn('[Event] Non-fatal Agora Chat setup notice:', chatErr);
+      }
+    } else {
+      if (session.status === 'ended') {
+        return res.status(400).json({
+          error: 'Event has concluded',
+          message: 'This live session has already ended and cannot be restarted.',
         });
       } else if (session.status !== 'active') {
-        // Scheduled -> activate without creating a duplicate
         session = await prisma.session.update({
           where: { id: session.id },
           data: { status: 'active', startedAt: session.startedAt || new Date() },
@@ -533,7 +539,6 @@ export const startEvent = async (req: Request, res: Response) => {
           });
         }
       } else {
-        // Already active — just ensure event is marked live
         if (event.status !== 'live') {
           await prisma.event.update({
             where: { id: id as string },
@@ -575,9 +580,11 @@ export const startEvent = async (req: Request, res: Response) => {
     return res.json({
       event: { ...event, status: 'live', sessionId: session.id, canStartLive: true, earliestStartAt: timing.earliestStartAt },
       session,
+      sessionId: session.id,
       agoraToken: tokenData.token,
       expiresAt: tokenData.expiresAt,
       uid: tokenData.uid,
+      hostUid: tokenData.uid,
       chatToken,
       chatUsername,
       agoraChatRoomId: session.agoraChatRoomId,
@@ -691,19 +698,29 @@ export const joinEvent = async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Live session not initialized for this event' });
     }
 
-    // CIA Access Control: Host is publisher; attendee publisher/subscriber based on room
-    const agoraRole = isHost ? 'publisher' : 'publisher';
-    const tokenData = generateAgoraToken(session.channelName, userId, agoraRole);
+    // Both host and attendees use publisher-role tokens in RTC mode.
+    // In rtc mode, all participants must join with publisher tokens — subscriber
+    // tokens can cause join failures or prevent track subscription in agora-rtc-react.
+    // Track publishing is controlled at the SDK level via usePublish/tracksToPublish,
+    // NOT at the token level. Only the host will actually call publish().
+    const tokenData = generateAgoraToken(session.channelName, userId, 'publisher');
 
     // Agora Chat Credentials
     const chatUsername = getChatUsername(userEmail);
     await agoraChatService.registerUser(chatUsername);
     const chatToken = agoraChatService.generateUserToken(chatUsername);
 
+    // hostUid: for the host it matches their own token uid, for attendees we
+    // compute the host's stable uid from the facilitatorId so the frontend can
+    // locate the host in the remoteUsers list.
+    const hostUid = isHost ? tokenData.uid : generateStableAgoraUid(event.facilitatorId);
+
     return res.json({
       event,
       session,
+      sessionId: session.id,
       isHost,
+      hostUid,
       hasTicket: true,
       role: userRole,
       agoraToken: tokenData.token,
@@ -716,6 +733,44 @@ export const joinEvent = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('[Event] Join Error:', error);
     return res.status(500).json({ error: 'Failed to join live event' });
+  }
+};
+
+export const refreshEventToken = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.userId;
+    const userRole = (req as any).user?.role || 'user';
+
+    const event = await prisma.event.findUnique({
+      where: { id: id as string },
+      include: { session: true },
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const session = event.session;
+    if (!session) {
+      return res.status(400).json({ error: 'This event does not have an active session' });
+    }
+
+    const isHost = event.facilitatorId === userId || userRole === 'admin' || userRole === 'super_admin';
+    // Always use publisher tokens in rtc mode (subscriber tokens cause track subscription failures)
+    const tokenData = generateAgoraToken(session.channelName, userId, 'publisher');
+    const hostUid = isHost ? tokenData.uid : generateStableAgoraUid(event.facilitatorId);
+
+    return res.json({
+      agoraToken: tokenData.token,
+      expiresAt: tokenData.expiresAt,
+      uid: tokenData.uid,
+      hostUid,
+      isHost,
+    });
+  } catch (error: any) {
+    console.error('[Event] Refresh token error:', error);
+    return res.status(500).json({ error: 'Failed to refresh event token' });
   }
 };
 

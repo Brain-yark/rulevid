@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
-import { generateAgoraToken, refreshAgoraToken } from '../services/agoraTokenService';
+import { generateAgoraToken, refreshAgoraToken, generateStableAgoraUid } from '../services/agoraTokenService';
 import { agoraRecordingService } from '../services/agoraRecordingService';
 import { agoraChatService } from '../services/agoraChatService';
 
@@ -55,7 +55,8 @@ export const createSession = async (req: Request, res: Response) => {
       session,
       agoraToken: tokenData.token,
       expiresAt: tokenData.expiresAt,
-      uid: tokenData.uid
+      uid: tokenData.uid,
+      hostUid: tokenData.uid,
     });
   } catch (error) {
     console.error('Session Creation Error:', error);
@@ -69,7 +70,11 @@ export const getSessions = async (req: Request, res: Response) => {
     const userRole = (req as any).user?.role || 'user';
     const { search, status, excludeStatus, view } = req.query;
 
-    const whereClause: any = {};
+    // Differentiate between standalone Studio Sessions and ticketed Event streams:
+    // Only return standalone sessions here. Event streams are handled exclusively under the Events view.
+    const whereClause: any = {
+      event: null,
+    };
 
     if (view === 'all' || view === 'active' || userRole === 'user') {
       // Public / attendee view: return active live sessions
@@ -125,6 +130,17 @@ export const joinSession = async (req: Request, res: Response) => {
       });
     }
 
+    const isHost = session.facilitatorId === userId;
+
+    if (session.status === 'scheduled' && !isHost) {
+      return res.status(403).json({
+        error: 'Session has not started',
+        message: 'The facilitator has not started this session yet.'
+      });
+    }
+
+    // All participants use publisher-role tokens in RTC mode — subscriber tokens
+    // prevent track subscriptions in agora-rtc-react when mode is "rtc".
     const tokenData = generateAgoraToken(session.channelName, userId, 'publisher');
 
     // ─── Agora Chat Integration ─────────────────────────────────────────────
@@ -133,7 +149,7 @@ export const joinSession = async (req: Request, res: Response) => {
     const chatToken = agoraChatService.generateUserToken(chatUsername);
 
     // Update status to active if joining
-    if (session.status === 'scheduled') {
+    if (session.status === 'scheduled' && isHost) {
       await prisma.session.update({
         where: { id: id as string },
         data: { status: 'active', startedAt: new Date() }
@@ -165,11 +181,15 @@ export const joinSession = async (req: Request, res: Response) => {
       }
     }
 
+    const hostUid = generateStableAgoraUid(session.facilitatorId);
+
     return res.json({
       session,
       agoraToken: tokenData.token,
       expiresAt: tokenData.expiresAt,
       uid: tokenData.uid,
+      hostUid,
+      isHost,
       chatToken,
       chatUsername,
       agoraChatRoomId: session.agoraChatRoomId
@@ -231,12 +251,29 @@ export const endSession = async (req: Request, res: Response) => {
       }
     });
 
+    // ─── Sync parent Event status ────────────────────────────────────────────
+    // If this session is linked to a parent Event that is still live,
+    // mark the event as ended too. This prevents orphaned 'live' events
+    // whose session has been ended, which would cause a new duplicate
+    // session to be silently created on the next join.
+    const linkedEvent = await prisma.event.findFirst({
+      where: { sessionId: id as string },
+    });
+    if (linkedEvent && (linkedEvent.status === 'live' || linkedEvent.status === 'published')) {
+      await prisma.event.update({
+        where: { id: linkedEvent.id },
+        data: { status: 'ended' },
+      });
+      console.info(`[Session] Ended linked event ${linkedEvent.id} after session ${id} was ended.`);
+    }
+
     return res.json(updatedSession);
   } catch (error) {
     console.error('End Session Error:', error);
     return res.status(500).json({ error: 'Failed to end session' });
   }
 };
+
 
 export const refreshToken = async (req: Request, res: Response) => {
   try {
@@ -256,11 +293,13 @@ export const refreshToken = async (req: Request, res: Response) => {
     }
 
     const tokenData = refreshAgoraToken(session.channelName, userId);
+    const hostUid = generateStableAgoraUid(session.facilitatorId);
 
     return res.json({
       agoraToken: tokenData.token,
       expiresAt: tokenData.expiresAt,
       uid: tokenData.uid,
+      hostUid,
     });
   } catch (error) {
     console.error('Token Refresh Error:', error);

@@ -7,6 +7,7 @@ import {
   createTicketCheckout,
   startEvent,
   joinEvent,
+  refreshEventToken,
   endEvent,
   updateEvent,
   deleteEvent,
@@ -57,6 +58,9 @@ router.post('/:id/start', requireAuth as RequestHandler, startEvent as unknown a
 
 // User joins live stream (entitlement gated)
 router.post('/:id/join', requireAuth as RequestHandler, joinEvent as unknown as RequestHandler);
+
+// Refresh Agora token for event room
+router.post('/:id/refresh-token', requireAuth as RequestHandler, refreshEventToken as unknown as RequestHandler);
 
 // Host ends live stream
 router.post('/:id/end', requireAuth as RequestHandler, endEvent as unknown as RequestHandler);
