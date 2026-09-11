@@ -2,11 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   X,
   Check,
-  Zap,
   Sparkles,
   Clock,
-  CreditCard,
-  ArrowRight,
 } from 'lucide-react';
 import { API_BASE } from '../config';
 import { useToast } from '../context/ToastContext';
@@ -26,13 +23,16 @@ export const FALLBACK_PACKAGES: BillingPackage[] = [
     id: 'pkg-free-001',
     name: 'Free',
     slug: 'free',
-    participantMinutes: 3000,
+    participantMinutes: 1000,
+    maxParticipantsPerSession: 10,
     priceCents: 0,
     effectiveRatePer1k: '—',
-    roughlyCovers: '~1 small event (e.g. 1hr, 50 attendees)',
+    roughlyCovers: '~1 small test event (e.g. 10 min, 10 attendees)',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Perfect for getting started, testing RuleVid, and hosting small interactive sessions.',
+    hasRecording: false,
+    hasAutoOverage: false,
+    description: 'Perfect for getting started and testing RuleVid with small sessions. No auto-overage.',
     isActive: true,
     isCustom: false,
   },
@@ -40,12 +40,15 @@ export const FALLBACK_PACKAGES: BillingPackage[] = [
     id: 'pkg-starter-002',
     name: 'Starter',
     slug: 'starter',
-    participantMinutes: 30000,
+    participantMinutes: 15000,
+    maxParticipantsPerSession: 50,
     priceCents: 3000,
-    effectiveRatePer1k: '$1.00/1k',
-    roughlyCovers: '~10 events of 50 attendees/hr',
+    effectiveRatePer1k: '$2.00/1k',
+    roughlyCovers: '~5 events of 50 attendees/hr',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
+    hasRecording: true,
+    hasAutoOverage: true,
     description: 'Ideal for growing community hosts, creators, and recurring weekly meetups.',
     isActive: true,
     isCustom: false,
@@ -54,12 +57,15 @@ export const FALLBACK_PACKAGES: BillingPackage[] = [
     id: 'pkg-growth-003',
     name: 'Growth',
     slug: 'growth',
-    participantMinutes: 150000,
+    participantMinutes: 60000,
+    maxParticipantsPerSession: 150,
     priceCents: 13000,
-    effectiveRatePer1k: '$0.87/1k',
-    roughlyCovers: '~50 events of 50 attendees/hr',
+    effectiveRatePer1k: '$2.17/1k',
+    roughlyCovers: '~7 events of 150 attendees/hr',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
+    hasRecording: true,
+    hasAutoOverage: true,
     description: 'Best value for high-volume masterclasses, workshops, and multi-track conferences.',
     isActive: true,
     isCustom: false,
@@ -68,13 +74,16 @@ export const FALLBACK_PACKAGES: BillingPackage[] = [
     id: 'pkg-scale-004',
     name: 'Scale',
     slug: 'scale',
-    participantMinutes: 750000,
+    participantMinutes: 200000,
+    maxParticipantsPerSession: 500,
     priceCents: 0,
     effectiveRatePer1k: 'negotiated',
-    roughlyCovers: 'high-volume enterprise hosts',
+    roughlyCovers: 'High-volume enterprise hosts (200k+ mins, 500+ participants)',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Custom tailored enterprise infrastructure with dedicated bitrate allocation & custom SLA.',
+    hasRecording: true,
+    hasAutoOverage: true,
+    description: 'Custom-tailored enterprise infrastructure with dedicated support & custom SLA.',
     isActive: true,
     isCustom: true,
   },
@@ -83,7 +92,6 @@ export const FALLBACK_PACKAGES: BillingPackage[] = [
 export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = ({
   isOpen,
   onClose,
-  onSuccess,
   currentPackageSlug,
   title = 'Choose Your Host Billing Package',
   subtitle = 'Select a participant-minute plan to host live sessions. Minutes renew every 30 days.',
@@ -91,7 +99,6 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
   const toast = useToast();
   const [packages, setPackages] = useState<BillingPackage[]>(FALLBACK_PACKAGES);
   const [selectedSlug, setSelectedSlug] = useState<string>('free');
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -118,79 +125,9 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
 
   if (!isOpen) return null;
 
-  const handleSelectPackage = async (slug: string) => {
+  const handleSelectPackage = (slug: string) => {
     setSelectedSlug(slug);
-  };
-
-  const handleSubscribe = async () => {
-    const token = localStorage.getItem('auth_token');
-    if (!token) {
-      toast.error('Sign In Required', 'Please sign in or register to subscribe to a host package.');
-      return;
-    }
-
-    const selectedPkg = packages.find((p) => p.slug === selectedSlug);
-    if (!selectedPkg) return;
-
-    if (selectedPkg.isCustom) {
-      toast.info(
-        'Scale Tier Requested',
-        'Our enterprise team has received your inquiry and will contact you directly.'
-      );
-      onClose();
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/billing/packages/subscribe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ packageSlug: selectedSlug }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to select package');
-      }
-
-      if (data.checkout_url) {
-        // Redirect to Stripe Checkout for paid tier
-        toast.info('Redirecting to Checkout', 'Opening secure Stripe payment...');
-        window.location.href = data.checkout_url;
-        return;
-      }
-
-      // Free tier subscribed immediately
-      toast.success(
-        'Host Tier Activated!',
-        `You are now on the Free Plan with 3,000 monthly participant-minutes.`
-      );
-
-      // Update local storage user role to host
-      try {
-        const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-        storedUser.role = 'host';
-        storedUser.billingPackageId = selectedPkg.id;
-        storedUser.packageMinutesTotal = selectedPkg.participantMinutes;
-        localStorage.setItem('user', JSON.stringify(storedUser));
-      } catch (e) {
-        // ignore
-      }
-
-      if (onSuccess) {
-        onSuccess(selectedSlug);
-      }
-      onClose();
-    } catch (err: any) {
-      toast.error('Subscription Error', err.message || 'Failed to activate package');
-    } finally {
-      setIsLoading(false);
-    }
+    toast.info('Billing Packages Coming Soon', 'Host packages are disabled during MVP testing.');
   };
 
   return (
@@ -210,6 +147,27 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
         <div className="modal-header-content">
           <h2>{title}</h2>
           <p className="modal-subtitle">{subtitle}</p>
+        </div>
+
+        {/* MVP Banner */}
+        <div style={{
+          margin: '0.5rem 0 1.25rem',
+          padding: '0.85rem 1.25rem',
+          borderRadius: '12px',
+          background: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid rgba(245, 158, 11, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          color: '#fbbf24'
+        }}>
+          <Sparkles size={20} />
+          <div style={{ textAlign: 'left' }}>
+            <strong style={{ display: 'block', fontSize: '0.9rem' }}>Billing Packages Coming Soon</strong>
+            <span style={{ fontSize: '0.82rem', color: '#fde68a' }}>
+              Paid tiers and subscriptions are disabled for MVP testing. Host accounts and participant capacities are managed directly by the platform administrator.
+            </span>
+          </div>
         </div>
 
         {/* Packages Grid */}
@@ -250,7 +208,11 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
                 <div className="pkg-features-list">
                   <div className="pkg-feature-item">
                     <Check size={16} className="feat-check" />
-                    <span>Effective rate: <strong>{pkg.effectiveRatePer1k || '$1.00/1k'}</strong></span>
+                    <span>Up to <strong>{pkg.maxParticipantsPerSession ?? 10}</strong> max participants / session</span>
+                  </div>
+                  <div className="pkg-feature-item">
+                    <Check size={16} className="feat-check" />
+                    <span>Effective rate: <strong>{pkg.effectiveRatePer1k || '$2.00/1k'}</strong></span>
                   </div>
                   <div className="pkg-feature-item">
                     <Check size={16} className="feat-check" />
@@ -258,30 +220,26 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
                   </div>
                   <div className="pkg-feature-item">
                     <Check size={16} className="feat-check" />
-                    <span>HD Video RTC &amp; Agora Chat</span>
+                    <span>{pkg.hasRecording ? 'Full HD Cloud Recording' : 'Basic Recording'}</span>
                   </div>
                   <div className="pkg-feature-item">
                     <Check size={16} className="feat-check" />
-                    <span>1-Click Top Up &amp; $10 overage protect</span>
+                    <span>{pkg.hasAutoOverage ? '1-Click Top Up & $10 overage protect' : '1-Click Top Up (No auto-overage)'}</span>
                   </div>
                 </div>
 
                 <button
                   type="button"
-                  className={`select-plan-btn ${isSelected ? 'selected-btn' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSelectPackage(pkg.slug);
+                  className="select-plan-btn"
+                  disabled
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    borderColor: 'rgba(255, 255, 255, 0.15)',
+                    color: '#94a3b8',
+                    cursor: 'not-allowed'
                   }}
                 >
-                  {isSelected ? (
-                    <>
-                      <Check size={16} />
-                      <span>Selected Plan</span>
-                    </>
-                  ) : (
-                    <span>Choose {pkg.name}</span>
-                  )}
+                  <span>Coming Soon</span>
                 </button>
               </div>
             );
@@ -290,47 +248,9 @@ export const BillingMarketplaceModal: React.FC<BillingMarketplaceModalProps> = (
 
         {/* Footer info & action */}
         <div className="modal-bottom-actions">
-          <div className="overage-info-box">
-            <Zap size={18} className="zap-icon" />
-            <div className="overage-info-text">
-              <strong>In-Stream Low Balance &amp; Overage Protection</strong>
-              <span>
-                You will receive in-stream alerts when below 20% remaining. If balance reaches zero, pre-saved cards automatically cover a small $10 block so your stream never drops.
-              </span>
-            </div>
-          </div>
-
-          <div className="action-buttons-row">
-            <button type="button" className="cancel-btn" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="confirm-subscribe-btn"
-              onClick={handleSubscribe}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <span>Processing...</span>
-              ) : selectedSlug === 'free' ? (
-                <>
-                  <span>Activate Free Tier (3,000 Mins)</span>
-                  <ArrowRight size={18} />
-                </>
-              ) : selectedSlug === 'scale' ? (
-                <>
-                  <span>Contact Sales for Scale Tier</span>
-                  <ArrowRight size={18} />
-                </>
-              ) : (
-                <>
-                  <span>
-                    Subscribe to {packages.find((p) => p.slug === selectedSlug)?.name} (
-                    ${(packages.find((p) => p.slug === selectedSlug)?.priceCents || 0) / 100})
-                  </span>
-                  <CreditCard size={18} />
-                </>
-              )}
+          <div className="action-buttons-row" style={{ width: '100%' }}>
+            <button type="button" className="confirm-subscribe-btn" onClick={onClose} style={{ width: '100%' }}>
+              <span>Close (Packages Disabled for MVP)</span>
             </button>
           </div>
         </div>

@@ -7,13 +7,16 @@ const DEFAULT_PACKAGES = [
     id: 'pkg-free-001',
     name: 'Free',
     slug: 'free',
-    participantMinutes: 3000,
+    participantMinutes: 50000,
+    maxParticipantsPerSession: 45,
     priceCents: 0,
     effectiveRatePer1k: '—',
-    roughlyCovers: '~1 small event (e.g. 1hr, 50 attendees)',
+    roughlyCovers: 'MVP Testing Package (up to 45 attendees, recording included)',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Perfect for getting started, testing RuleVid, and hosting small interactive sessions.',
+    hasRecording: true,
+    hasAutoOverage: false,
+    description: 'MVP test tier: 45 attendees max, full HD streaming & cloud recording enabled.',
     isActive: true,
     isCustom: false,
   },
@@ -21,13 +24,16 @@ const DEFAULT_PACKAGES = [
     id: 'pkg-starter-002',
     name: 'Starter',
     slug: 'starter',
-    participantMinutes: 30000,
+    participantMinutes: 15000,
+    maxParticipantsPerSession: 45,
     priceCents: 3000,
-    effectiveRatePer1k: '$1.00/1k',
-    roughlyCovers: '~10 events of 50 attendees/hr',
+    effectiveRatePer1k: '$2.00/1k',
+    roughlyCovers: '~5 events of 45 attendees/hr',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Ideal for growing community hosts, creators, and recurring weekly meetups.',
+    hasRecording: true,
+    hasAutoOverage: true,
+    description: 'Ideal for community hosts, creators, and recurring weekly meetups.',
     isActive: true,
     isCustom: false,
   },
@@ -35,13 +41,16 @@ const DEFAULT_PACKAGES = [
     id: 'pkg-growth-003',
     name: 'Growth',
     slug: 'growth',
-    participantMinutes: 150000,
+    participantMinutes: 60000,
+    maxParticipantsPerSession: 45,
     priceCents: 13000,
-    effectiveRatePer1k: '$0.87/1k',
-    roughlyCovers: '~50 events of 50 attendees/hr',
+    effectiveRatePer1k: '$2.17/1k',
+    roughlyCovers: '~7 events of 45 attendees/hr',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Best value for high-volume masterclasses, workshops, and multi-track conferences.',
+    hasRecording: true,
+    hasAutoOverage: true,
+    description: 'Best value for masterclasses, workshops, and multi-track conferences.',
     isActive: true,
     isCustom: false,
   },
@@ -49,13 +58,16 @@ const DEFAULT_PACKAGES = [
     id: 'pkg-scale-004',
     name: 'Scale',
     slug: 'scale',
-    participantMinutes: 750000,
+    participantMinutes: 200000,
+    maxParticipantsPerSession: 45,
     priceCents: 0,
     effectiveRatePer1k: 'negotiated',
-    roughlyCovers: 'high-volume enterprise hosts',
+    roughlyCovers: 'High-volume enterprise hosts (up to 45 participants)',
     overageBlockCents: 1000,
     overageBlockMinutes: 10000,
-    description: 'Custom tailored enterprise infrastructure with dedicated bitrate allocation & custom SLA.',
+    hasRecording: true,
+    hasAutoOverage: true,
+    description: 'Custom-tailored enterprise infrastructure with dedicated support & custom SLA.',
     isActive: true,
     isCustom: true,
   },
@@ -63,23 +75,21 @@ const DEFAULT_PACKAGES = [
 
 export class PackageService {
   /**
-   * Ensures default packages exist in the database.
+   * Ensures default packages exist in the database and are always up to date.
+   * Uses upsert so canonical values are synced on every server startup.
    */
   async ensureDefaultPackages(): Promise<void> {
     try {
-      const count = await prisma.billingPackage.count();
-      if (count === 0) {
-        logger.info('[PackageService] Seeding default billing packages...');
-        for (const pkg of DEFAULT_PACKAGES) {
-          await prisma.billingPackage.upsert({
-            where: { slug: pkg.slug },
-            update: {},
-            create: pkg,
-          });
-        }
+      for (const pkg of DEFAULT_PACKAGES) {
+        const { id, ...rest } = pkg;
+        await prisma.billingPackage.upsert({
+          where: { slug: pkg.slug },
+          update: rest,    // Always sync canonical values
+          create: pkg,
+        });
       }
     } catch (err: any) {
-      logger.warn({ err: err.message }, '[PackageService] Could not auto-seed packages');
+      logger.warn({ err: err.message }, '[PackageService] Could not auto-seed/sync packages');
     }
   }
 

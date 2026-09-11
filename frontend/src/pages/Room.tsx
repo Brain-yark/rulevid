@@ -228,13 +228,32 @@ const Room: React.FC<RoomProps> = ({
           margin: "4rem auto",
         }}
       >
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
+          <div
+            style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '50%',
+              background: 'rgba(244, 63, 94, 0.15)',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#f43f5e',
+            }}
+          >
+            <Users size={28} />
+          </div>
+        </div>
         <h3
           style={{ color: "#f43f5e", marginBottom: "1rem", fontSize: "1.4rem" }}
         >
-          Access Restricted
+          {errorMessage.toLowerCase().includes('capacity') || errorMessage.toLowerCase().includes('participant')
+            ? 'Session Capacity Reached'
+            : 'Access Restricted'}
         </h3>
         <p
-          style={{ color: "#94a3b8", marginBottom: "2rem", lineHeight: "1.5" }}
+          style={{ color: "#94a3b8", marginBottom: "2rem", lineHeight: "1.6", fontSize: '0.95rem' }}
         >
           {errorMessage}
         </p>
@@ -856,6 +875,7 @@ const ActiveRoom: React.FC<{
   } | null>(null);
   const [graceCountdown, setGraceCountdown] = useState<number | null>(null);
   const [isTopupProcessing, setIsTopupProcessing] = useState(false);
+  const [streamEndedMessage, setStreamEndedMessage] = useState<string | null>(null);
 
   // ─── Socket.io Presence & Billing Monitoring ───────────────────────────────
   useEffect(() => {
@@ -977,10 +997,17 @@ const ActiveRoom: React.FC<{
       setGraceCountdown(null);
     });
 
-    socket.on("billing:stream_ending", (data) => {
-      alert(data.message || "This live stream has ended.");
-      onExit();
-    });
+    const handleStreamEnd = async (data: any) => {
+      console.log("[Room] Received stream ending signal:", data);
+      await cleanupTracksAndLeave();
+      const msg = data?.message || "This live session has concluded.";
+      setStreamEndedMessage(msg);
+      // Auto-redirect after 5 seconds
+      setTimeout(() => onExit(), 5000);
+    };
+
+    socket.on("stream_ended", handleStreamEnd);
+    socket.on("billing:stream_ending", handleStreamEnd);
 
     return () => {
       socket.emit("leave_session", sessionId);
@@ -1228,7 +1255,25 @@ const ActiveRoom: React.FC<{
   };
 
   return (
-    <div className="room-container animate-fade-in">
+    <div className={`room-container animate-fade-in${isSharing ? " is-sharing" : ""}`}>
+      {/* ── Session Ended Overlay ── */}
+      {streamEndedMessage && (
+        <div className="stream-ended-overlay">
+          <div className="stream-ended-card">
+            <div className="stream-ended-icon">📺</div>
+            <h2>Session Ended</h2>
+            <p>{streamEndedMessage}</p>
+            <p className="stream-ended-redirect">Redirecting you in 5 seconds…</p>
+            <button
+              type="button"
+              className="stream-ended-btn"
+              onClick={onExit}
+            >
+              Leave Now
+            </button>
+          </div>
+        </div>
+      )}
       {/* ── In-Stream Low Balance Alert Banner for Host ── */}
       {lowBalanceAlert && !graceCountdown && (
         <div className="in-stream-warning-banner low-balance animate-fade-in">
@@ -1270,6 +1315,9 @@ const ActiveRoom: React.FC<{
                       width: "100%",
                       height: "100%",
                       objectFit: "contain",
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
                     }}
                   />
                 ) : localCameraTrack && isCameraOn ? (
@@ -2015,6 +2063,27 @@ const ActiveRoom: React.FC<{
           background: #1e293b;
         }
 
+        /* ── Screen Share: full edge-to-edge layout ── */
+        .is-sharing .video-area {
+          padding: 0;
+          gap: 0;
+        }
+
+        .is-sharing .video-grid {
+          gap: 0;
+        }
+
+        .is-sharing .main-host {
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        /* Override global cover so screen content isn't cropped */
+        .is-sharing .video-tile video {
+          object-fit: contain !important;
+          background: #000;
+        }
+
         .audience-grid {
           display: flex;
           gap: 0.75rem;
@@ -2440,6 +2509,85 @@ const ActiveRoom: React.FC<{
           background: rgba(255, 255, 255, 0.05);
           padding: 0.2rem 0.5rem;
           border-radius: 4px;
+        }
+
+        /* ── Session Ended Overlay ── */
+        .stream-ended-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.82);
+          backdrop-filter: blur(12px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          animation: fadeIn 0.4s ease;
+        }
+
+        .stream-ended-card {
+          background: linear-gradient(135deg, rgba(30, 30, 46, 0.97) 0%, rgba(20, 20, 35, 0.97) 100%);
+          border: 1px solid rgba(139, 92, 246, 0.3);
+          border-radius: 24px;
+          padding: 3rem 2.5rem;
+          max-width: 440px;
+          width: 90%;
+          text-align: center;
+          box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7), 0 0 40px rgba(139, 92, 246, 0.15);
+          animation: slideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .stream-ended-icon {
+          font-size: 3.5rem;
+          margin-bottom: 1rem;
+          animation: pulse 2s ease-in-out infinite;
+        }
+
+        .stream-ended-card h2 {
+          font-size: 1.8rem;
+          font-weight: 700;
+          color: #fff;
+          margin: 0 0 0.75rem;
+          background: linear-gradient(135deg, #c084fc, #818cf8);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+
+        .stream-ended-card p {
+          font-size: 1rem;
+          color: rgba(255, 255, 255, 0.75);
+          margin: 0 0 0.5rem;
+          line-height: 1.6;
+        }
+
+        .stream-ended-redirect {
+          font-size: 0.85rem !important;
+          color: rgba(255, 255, 255, 0.4) !important;
+          margin-bottom: 1.75rem !important;
+        }
+
+        .stream-ended-btn {
+          display: inline-block;
+          padding: 0.75rem 2rem;
+          background: linear-gradient(135deg, #7c3aed, #4f46e5);
+          color: white;
+          border: none;
+          border-radius: 12px;
+          font-size: 0.95rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
+        }
+
+        .stream-ended-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 28px rgba(124, 58, 237, 0.6);
+        }
+
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(30px) scale(0.95); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
         /* ── In-Stream Billing Alert Banners ── */

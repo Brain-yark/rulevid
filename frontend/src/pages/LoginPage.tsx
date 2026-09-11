@@ -1,21 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Radio,
   ShieldCheck,
   Zap,
   Globe,
   User,
-  Users,
   Sparkles,
   Key,
   Check,
   Clock,
-  ArrowRight,
   CreditCard,
 } from 'lucide-react';
 import { API_BASE } from '../config';
 import { useToast } from '../context/ToastContext';
-import type { UserRole } from '../../../shared/types';
+import type { BillingPackage } from '../../../shared/types';
 import { FALLBACK_PACKAGES } from '../components/BillingMarketplaceModal';
 
 interface LoginPageProps {
@@ -28,11 +26,22 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>('user');
-  const [companyName, setCompanyName] = useState('');
-  const [packageSlug, setPackageSlug] = useState<string>('free');
+  const [packages, setPackages] = useState<BillingPackage[]>(FALLBACK_PACKAGES);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/billing/packages`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setPackages(data);
+        }
+      })
+      .catch(() => {
+        // Fallback to FALLBACK_PACKAGES
+      });
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,12 +51,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     }
     if (!isLogin && !name) {
       toast.warning('Input Required', 'Please enter your name.');
-      return;
-    }
-
-    // If host registering, package selection is mandatory
-    if (!isLogin && role === 'host' && !packageSlug) {
-      toast.warning('Billing Package Required', 'Please select a host billing package to continue.');
       return;
     }
 
@@ -61,9 +64,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           email: email.trim(),
           password,
           name: name.trim(),
-          role,
-          companyName: companyName.trim() || undefined,
-          packageSlug: role === 'host' ? packageSlug : undefined,
+          role: 'user',
         };
 
     try {
@@ -122,11 +123,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   };
 
   const selectPlanAndRegister = (slug: string) => {
-    setIsLogin(false);
-    setRole('host');
-    setPackageSlug(slug);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    toast.info('Plan Selected', `Chosen ${slug.toUpperCase()} plan for your host account.`);
+    toast.info('Coming Soon', `The ${slug.toUpperCase()} package will be available soon. Host accounts are provisioned exclusively by the platform administrator for MVP testing.`);
   };
 
   return (
@@ -210,36 +207,25 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           <p className="login-desc">
             {isLogin
               ? 'Access your RuleVid account, tickets, and live sessions'
-              : 'Join RuleVid as an Attendee or Host with transparent participant-minute billing'}
+              : 'Create an Attendee account to reserve tickets and join live broadcast experiences'}
           </p>
 
           {!isLogin && (
             <div className="role-selector-group">
-              <label className="role-label">Choose Account Type:</label>
-              <div className="role-buttons">
-                <button
-                  type="button"
-                  className={`role-btn ${role === 'user' ? 'active' : ''}`}
-                  onClick={() => setRole('user')}
-                >
-                  <User size={18} />
-                  <div>
-                    <span className="role-title">Attendee</span>
-                    <span className="role-sub">Attend live experiences</span>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  className={`role-btn ${role === 'host' ? 'active' : ''}`}
-                  onClick={() => setRole('host')}
-                >
-                  <Users size={18} />
-                  <div>
-                    <span className="role-title">Facilitator / Host</span>
-                    <span className="role-sub">Create &amp; monetize events</span>
-                  </div>
-                </button>
+              <div className="attendee-pill-badge">
+                <User size={20} className="text-primary" />
+                <div>
+                  <strong className="role-title" style={{ display: 'block', color: 'var(--text-primary)' }}>
+                    Attendee Account (Free)
+                  </strong>
+                  <span className="role-sub" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Instant access to live events, RTC audio/video, and interactive chat
+                  </span>
+                </div>
+              </div>
+              <div className="mvp-admin-notice-pill">
+                <ShieldCheck size={14} className="text-amber" />
+                <span>Host accounts are manually provisioned by the administrator for the MVP.</span>
               </div>
             </div>
           )}
@@ -257,55 +243,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                   onChange={(e) => setName(e.target.value)}
                   required={!isLogin}
                 />
-              </div>
-            )}
-
-            {!isLogin && role === 'host' && (
-              <div className="form-group">
-                <label>Company / Studio Name (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Acme Media or Creator Brand"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                />
-              </div>
-            )}
-
-            {/* Mandatory Package Selection for Hosts during signup */}
-            {!isLogin && role === 'host' && (
-              <div className="signup-package-section">
-                <label className="package-section-title">
-                  <span>Select Host Billing Package * (Required)</span>
-                </label>
-                <p className="package-section-sub">
-                  Choose a monthly plan. Minutes renew every 30 days with $10 overage protection.
-                </p>
-
-                <div className="signup-packages-grid">
-                  {FALLBACK_PACKAGES.map((pkg) => {
-                    const isSelected = packageSlug === pkg.slug;
-                    return (
-                      <div
-                        key={pkg.slug}
-                        className={`signup-pkg-card ${isSelected ? 'selected' : ''}`}
-                        onClick={() => setPackageSlug(pkg.slug)}
-                      >
-                        <div className="signup-pkg-header">
-                          <strong>{pkg.name}</strong>
-                          <span className="signup-pkg-price">
-                            {pkg.isCustom ? 'Custom' : `$${pkg.priceCents / 100}`}
-                          </span>
-                        </div>
-                        <span className="signup-pkg-mins">
-                          {pkg.participantMinutes.toLocaleString()} mins
-                        </span>
-                        <span className="signup-pkg-desc">{pkg.roughlyCovers}</span>
-                        {isSelected && <div className="pkg-selected-indicator"><Check size={12} /></div>}
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
             )}
 
@@ -337,9 +274,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               ) : isLogin ? (
                 <span>Sign In</span>
               ) : (
-                <span>
-                  Register as {role === 'host' ? `Host (${packageSlug.toUpperCase()})` : 'Attendee'}
-                </span>
+                <span>Register as Attendee</span>
               )}
             </button>
           </form>
@@ -384,7 +319,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         </div>
 
         <div className="pricing-cards-grid">
-          {FALLBACK_PACKAGES.map((pkg) => {
+          {packages.map((pkg) => {
             const isPopular = pkg.slug === 'starter';
             return (
               <div key={pkg.slug} className={`landing-pricing-card ${isPopular ? 'popular' : ''}`}>
@@ -406,36 +341,49 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                   <span><strong>{pkg.participantMinutes.toLocaleString()}</strong> participant-mins</span>
                 </div>
 
-                <div className="card-coverage-box">
-                  <span>Covers: {pkg.roughlyCovers}</span>
+                <div className="card-coverage-box" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <span>Max Capacity: <strong>{pkg.maxParticipantsPerSession ? `${pkg.maxParticipantsPerSession.toLocaleString()} participants / session` : '10 / session'}</strong></span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Covers: {pkg.roughlyCovers}</span>
                 </div>
 
                 <ul className="card-features-list">
                   <li>
                     <Check size={16} className="feat-icon" />
-                    <span>Effective rate: <strong>{pkg.effectiveRatePer1k || '$1.00/1k'}</strong></span>
+                    <span>Up to <strong>{pkg.maxParticipantsPerSession ?? 10}</strong> max participants / session</span>
                   </li>
                   <li>
                     <Check size={16} className="feat-icon" />
-                    <span>30-Day Auto Monthly Reset</span>
+                    <span>Effective rate: <strong>{pkg.effectiveRatePer1k || '$2.00/1k'}</strong></span>
                   </li>
                   <li>
                     <Check size={16} className="feat-icon" />
-                    <span>In-Stream Low Balance Warnings</span>
+                    <span>30-Day Monthly Reset &amp; Rollover</span>
                   </li>
                   <li>
                     <Check size={16} className="feat-icon" />
-                    <span>1-Click Top Up &amp; $10 Auto-Overage</span>
+                    <span>Low-Balance Warning Alerts</span>
+                  </li>
+                  <li>
+                    <Check size={16} className="feat-icon" />
+                    <span>{pkg.hasRecording ? 'Full HD Cloud Recording Included' : 'Basic Recording'}</span>
+                  </li>
+                  <li>
+                    <Check size={16} className="feat-icon" />
+                    <span>{pkg.hasAutoOverage ? '1-Click Top-Up & $10 Auto-Overage' : '1-Click Top-Up (No Auto-Overage)'}</span>
+                  </li>
+                  <li>
+                    <Check size={16} className="feat-icon" />
+                    <span>Interactive HD RTC &amp; Agora Chat</span>
                   </li>
                 </ul>
 
                 <button
                   type="button"
-                  className={`card-cta-btn ${isPopular ? 'popular-btn' : ''}`}
+                  className="card-cta-btn btn-disabled-coming-soon"
                   onClick={() => selectPlanAndRegister(pkg.slug)}
                 >
-                  <span>Select {pkg.name} Plan</span>
-                  <ArrowRight size={16} />
+                  <span>Coming Soon</span>
+                  <Sparkles size={15} />
                 </button>
               </div>
             );
@@ -636,6 +584,44 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
         .role-selector-group {
           margin-bottom: 1.25rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.6rem;
+        }
+
+        .attendee-pill-badge {
+          display: flex;
+          align-items: center;
+          gap: 0.85rem;
+          padding: 0.85rem 1rem;
+          background: rgba(99, 102, 241, 0.12);
+          border: 1px solid rgba(99, 102, 241, 0.3);
+          border-radius: 12px;
+          text-align: left;
+        }
+
+        .mvp-admin-notice-pill {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.75rem;
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.25);
+          border-radius: 8px;
+          font-size: 0.78rem;
+          color: #fbbf24;
+          line-height: 1.35;
+        }
+
+        .btn-disabled-coming-soon {
+          background: rgba(255, 255, 255, 0.06) !important;
+          border: 1px solid rgba(255, 255, 255, 0.15) !important;
+          color: #94a3b8 !important;
+          cursor: not-allowed !important;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
         }
 
         .role-label {

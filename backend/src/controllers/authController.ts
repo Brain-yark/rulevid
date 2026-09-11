@@ -22,22 +22,14 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    const requestedRole = (role || 'user').toString().toLowerCase().trim();
-    const validSelfRegisterRoles: UserRole[] = ['user', 'host'];
-    const assignedRole: UserRole = (validSelfRegisterRoles as string[]).includes(requestedRole)
-      ? (requestedRole as UserRole)
-      : 'user';
+    // Strict MVP Policy: Public self-registration is strictly for attendees ('user').
+    // Host accounts are provisioned exclusively by the Super Admin (max 3 hosts allowed).
+    const assignedRole: UserRole = 'user';
 
     const existingUser = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (existingUser) {
       return res.status(400).json({ error: 'Email is already taken' });
     }
-
-    const selectedSlug = packageSlug || 'free';
-    const isPaidSignup = assignedRole === 'host' && (selectedSlug === 'starter' || selectedSlug === 'growth');
-
-    // If paid host signup, account starts as 'user' until Stripe payment confirms
-    const initialRole: UserRole = isPaidSignup ? 'user' : assignedRole;
 
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
@@ -45,7 +37,7 @@ export const register = async (req: Request, res: Response) => {
         email: email.toLowerCase().trim(),
         passwordHash,
         name: name?.trim() || null,
-        role: initialRole,
+        role: 'user',
         companyName: companyName?.trim() || null,
         status: 'active',
         emailVerified: false,
@@ -53,52 +45,7 @@ export const register = async (req: Request, res: Response) => {
       },
     });
 
-    let checkoutUrl: string | undefined = undefined;
-
-    // If host registering:
-    if (assignedRole === 'host') {
-      if (selectedSlug === 'free') {
-        try {
-          await packageService.subscribeFreePackage(user.id);
-          logger.info(`[Auth] Free host package subscribed for ${user.email}`);
-        } catch (pkgErr: any) {
-          logger.warn({ pkgErr: pkgErr.message }, '[Auth] Free package subscription error (non-fatal)');
-        }
-      } else if (isPaidSignup) {
-        try {
-          const pkg = await packageService.getPackageBySlug(selectedSlug);
-          if (pkg) {
-            const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-            const session = await stripeService.createPackageCheckoutSession(
-              user.id,
-              pkg.slug,
-              pkg.name,
-              pkg.priceCents,
-              pkg.participantMinutes,
-              `${FRONTEND_URL}/billing?success=true&package=${pkg.slug}`,
-              `${FRONTEND_URL}/billing?canceled=true`
-            );
-            checkoutUrl = session.url || undefined;
-          }
-        } catch (stripeErr: any) {
-          logger.warn({ stripeErr: stripeErr.message }, '[Auth] Stripe package checkout creation error');
-        }
-      }
-
-      // Provision Lago wallet
-      try {
-        await billingService.createLagoCustomer(user.id, user.email);
-        const finalWalletId = await billingService.createLagoWallet(user.id);
-        if (finalWalletId) {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { walletId: finalWalletId },
-          });
-        }
-      } catch (lagoErr: any) {
-        logger.warn({ lagoErr: lagoErr.message }, '[Auth] Lago provisioning failed (non-fatal)');
-      }
-    }
+    const checkoutUrl: string | undefined = undefined;
 
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },

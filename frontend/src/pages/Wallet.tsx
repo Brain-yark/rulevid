@@ -42,7 +42,7 @@ const Wallet: React.FC<WalletProps> = () => {
   const [isLoadingTx, setIsLoadingTx] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const isProcessing = false;
   const [isTogglingOverage, setIsTogglingOverage] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -134,26 +134,7 @@ const Wallet: React.FC<WalletProps> = () => {
   }, [fetchPackageStatus, fetchTransactions]);
 
   const handleOneClickTopup = async () => {
-    setIsProcessing(true);
-    try {
-      const res = await fetch(`${WALLET_API}/billing/one-click-topup`, {
-        method: 'POST',
-        headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success('1-Click Top-Up Succeeded!', data.message);
-        fetchPackageStatus();
-        fetchTransactions();
-      } else {
-        toast.error('Top-Up Failed', data.error || 'Please add a payment method in your billing portal.');
-      }
-    } catch (e: any) {
-      toast.error('Network Error', e.message);
-    } finally {
-      setIsProcessing(false);
-    }
+    toast.info('Coming Soon', '1-Click Top-Up and credit cards are disabled for MVP testing. Host minutes are provisioned directly by the platform administrator.');
   };
 
   const handleToggleOverageConsent = async () => {
@@ -184,26 +165,7 @@ const Wallet: React.FC<WalletProps> = () => {
   };
 
   const handleManageBilling = async () => {
-    setIsProcessing(true);
-    try {
-      const res = await fetch(`${WALLET_API}/billing/portal`, {
-        headers: getAuthHeader(),
-      });
-      const data = await res.json();
-      if (res.ok && data.url) {
-        window.location.href = data.url;
-      } else {
-        setBanner({ 
-          type: 'error', 
-          message: data.error || 'Failed to open billing portal. Have you saved a payment method yet?' 
-        });
-        setIsProcessing(false);
-      }
-    } catch (e) {
-      console.error('[Wallet] Portal access failed:', e);
-      setBanner({ type: 'error', message: 'Network error. Please try again.' });
-      setIsProcessing(false);
-    }
+    toast.info('Coming Soon', 'Stripe card management and billing portal are disabled for MVP testing. No payment method is required.');
   };
 
   const formatDate = (iso: string) =>
@@ -219,6 +181,28 @@ const Wallet: React.FC<WalletProps> = () => {
           <button className="banner-close" onClick={() => setBanner(null)}>×</button>
         </div>
       )}
+
+      {/* ── MVP Notice Banner ── */}
+      <div style={{
+        padding: '1rem 1.25rem',
+        marginBottom: '1.5rem',
+        borderRadius: '16px',
+        borderLeft: '4px solid #fbbf24',
+        background: 'rgba(245, 158, 11, 0.08)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '1rem',
+      }}>
+        <Sparkles size={24} style={{ color: '#fbbf24', flexShrink: 0 }} />
+        <div>
+          <strong style={{ color: '#fbbf24', fontSize: '0.95rem', display: 'block' }}>
+            MVP Testing Mode: Payment Methods &amp; Top-Ups Disabled (Coming Soon)
+          </strong>
+          <p style={{ margin: '0.2rem 0 0', fontSize: '0.83rem', color: '#fde68a' }}>
+            Real-money wallet top-ups, Stripe card storage, and auto-overage charges are currently disabled for beta testing. Test host accounts have pre-allocated capacity with no payment method required.
+          </p>
+        </div>
+      </div>
 
       <header className="wallet-header">
         <div>
@@ -284,6 +268,20 @@ const Wallet: React.FC<WalletProps> = () => {
                 {packageStatus?.daysUntilReset !== null ? `In ${packageStatus?.daysUntilReset} days` : '30-day rollover'}
               </span>
             </div>
+            <div className="pkg-stat-box">
+              <span className="stat-label">Max Capacity / Session</span>
+              <span className="stat-val">
+                {packageStatus?.package?.maxParticipantsPerSession
+                  ? `${packageStatus.package.maxParticipantsPerSession.toLocaleString()} attendees`
+                  : '10 attendees'}
+              </span>
+            </div>
+            <div className="pkg-stat-box">
+              <span className="stat-label">Cloud Recording</span>
+              <span className="stat-val">
+                {packageStatus?.package?.hasRecording ? 'Full HD Included' : 'Basic Tier'}
+              </span>
+            </div>
           </div>
 
           {/* Overage Toggle Box */}
@@ -292,9 +290,16 @@ const Wallet: React.FC<WalletProps> = () => {
               <div className="overage-title-row">
                 <Zap size={16} className="text-amber" />
                 <strong>Auto $10 Overage Protection</strong>
+                {packageStatus?.package && !packageStatus.package.hasAutoOverage && (
+                  <span style={{ fontSize: '0.72rem', background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '0.15rem 0.5rem', borderRadius: '6px', fontWeight: 600 }}>
+                    NOT INCLUDED ON FREE
+                  </span>
+                )}
               </div>
               <span className="overage-desc">
-                When balance hits zero during a live session, automatically charge a $10 block (+10,000 mins) so your stream never drops.
+                {packageStatus?.package && !packageStatus.package.hasAutoOverage
+                  ? 'Auto-overage is disabled on the Free tier. Upgrade to Starter or Growth to enable automatic +10,000 min top-ups.'
+                  : 'When balance hits zero during a live session, automatically charge a $10 block (+10,000 mins) so your stream never drops.'}
               </span>
             </div>
 
@@ -302,7 +307,8 @@ const Wallet: React.FC<WalletProps> = () => {
               type="button"
               className={`toggle-switch-btn ${packageStatus?.overageConsent ? 'on' : 'off'}`}
               onClick={handleToggleOverageConsent}
-              disabled={isTogglingOverage}
+              disabled={isTogglingOverage || (packageStatus?.package ? !packageStatus.package.hasAutoOverage : false)}
+              title={packageStatus?.package && !packageStatus.package.hasAutoOverage ? 'Upgrade to Starter to enable auto-overage' : undefined}
             >
               <div className="toggle-handle" />
             </button>

@@ -202,6 +202,7 @@ const App: React.FC = () => {
               setCurrentPage('room'); 
             }} 
             onGoToWallet={() => setCurrentPage('wallet')} 
+            onNavigateToEvents={() => setCurrentPage('events')}
           />
         );
       case 'room':

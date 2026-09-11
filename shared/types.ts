@@ -5,11 +5,14 @@ export interface BillingPackage {
   name: string;
   slug: string; // 'free' | 'starter' | 'growth' | 'scale'
   participantMinutes: number;
+  maxParticipantsPerSession: number;
   priceCents: number;
   effectiveRatePer1k?: string | null;
   roughlyCovers?: string | null;
   overageBlockCents: number;
   overageBlockMinutes: number;
+  hasRecording: boolean;
+  hasAutoOverage: boolean;
   description?: string | null;
   isActive: boolean;
   isCustom: boolean;

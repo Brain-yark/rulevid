@@ -3,6 +3,10 @@ import { prisma } from '../db';
 import { generateAgoraToken, refreshAgoraToken, generateStableAgoraUid } from '../services/agoraTokenService';
 import { agoraRecordingService } from '../services/agoraRecordingService';
 import { agoraChatService } from '../services/agoraChatService';
+import { agoraChannelService } from '../services/agoraChannelService';
+import { socketService } from '../services/socketService';
+import { balanceMonitorJob } from '../jobs/balanceMonitor';
+import { IS_MVP_MODE, MAX_ROOM_CAPACITY } from '../config/mvpConfig';
 
 /**
  * Sanitizes an email into a valid Agora Chat username.
@@ -14,6 +18,15 @@ const getChatUsername = (email: string) => {
 
 export const createSession = async (req: Request, res: Response) => {
   try {
+    // Strict MVP Policy: Hosts only host scheduled Events, not ad-hoc direct sessions.
+    // Attendees cannot host any session or event.
+    if (IS_MVP_MODE) {
+      return res.status(403).json({
+        error: 'Direct sessions disabled',
+        message: 'In MVP mode, ad-hoc sessions are disabled. Hosts host scheduled Events only. Please create an Event from the Events tab.',
+      });
+    }
+
     const userId = (req as any).user.userId;
     let userEmail = (req as any).user.email;
     const { title } = req.body;
@@ -139,6 +152,18 @@ export const joinSession = async (req: Request, res: Response) => {
       });
     }
 
+    // Strict MVP Limit: 45 participants maximum (host included)
+    if (!isHost) {
+      const socketCount = socketService ? socketService.getAudienceCount(session.id) : 0;
+      const currentParticipants = Math.max(socketCount, session.participantCount || 0);
+      if (currentParticipants >= MAX_ROOM_CAPACITY) {
+        return res.status(403).json({
+          error: 'Session is full',
+          message: `This session has reached its maximum capacity of ${MAX_ROOM_CAPACITY} participants (including host).`,
+        });
+      }
+    }
+
     // All participants use publisher-role tokens in RTC mode — subscriber tokens
     // prevent track subscriptions in agora-rtc-react when mode is "rtc".
     const tokenData = generateAgoraToken(session.channelName, userId, 'publisher');
@@ -235,11 +260,28 @@ export const endSession = async (req: Request, res: Response) => {
       }
     }
 
+    // 1. Forcefully terminate the Agora RTC channel on Agora server-side
+    await agoraChannelService.kickAllFromChannel(session.channelName);
+
+    // 2. Broadcast stream_ended to all connected sockets in the session
+    socketService?.broadcastStreamEnded(session.id, 'This live session has concluded.');
+
     const endedAt = new Date();
     const startedAt = session.startedAt || session.createdAt;
     const durationMs = endedAt.getTime() - startedAt.getTime();
-    // Use Math.round so analytics totalMinutes matches billing deduction math
-    const totalMinutes = Math.round(durationMs / 60000);
+    const wallClockMinutes = Math.max(1, Math.round(durationMs / 60000));
+
+    // 3. Determine peak participant count
+    const socketAudienceCount = socketService ? socketService.getAudienceCount(session.id) : 0;
+    const peakParticipants = Math.max(1, session.participantCount || 0, socketAudienceCount);
+
+    // 4. Calculate total participant-minutes (matching Agora RTC billable minutes)
+    const accumulatedMins = balanceMonitorJob.getSessionParticipantMinutes(session.id);
+    const totalMinutes = Math.max(
+      wallClockMinutes,
+      accumulatedMins,
+      Math.round((durationMs * peakParticipants) / 60000)
+    );
 
     const updatedSession = await prisma.session.update({
       where: { id: id as string },
@@ -247,9 +289,12 @@ export const endSession = async (req: Request, res: Response) => {
         status: 'ended',
         endedAt,
         totalMinutes,
+        participantCount: peakParticipants,
         recordingUrl
       }
     });
+
+    balanceMonitorJob.cleanupSession(session.id);
 
     // ─── Sync parent Event status ────────────────────────────────────────────
     // If this session is linked to a parent Event that is still live,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogOut, LayoutDashboard, Wallet as WalletIcon, Ticket, ShieldAlert, TrendingUp, Radio, Sparkles } from 'lucide-react';
+import { LogOut, LayoutDashboard, Wallet as WalletIcon, Ticket, ShieldAlert, TrendingUp, Radio } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
 import { BillingMarketplaceModal } from './BillingMarketplaceModal';
 import type { UserRole } from '../../../shared/types';
@@ -55,17 +55,6 @@ const Layout: React.FC<LayoutProps> = ({ user, currentPage, onLogout, onNavigate
               <Ticket size={18} />
               <span>Browse Events</span>
             </button>
-
-            {!isHost && (
-              <button
-                onClick={() => setShowBillingModal(true)}
-                className="nav-link nav-upgrade-btn"
-                title="Choose a Host billing package to create and monetize live experiences"
-              >
-                <Sparkles size={18} className="text-primary" />
-                <span>Host an Event</span>
-              </button>
-            )}
 
             {isHost && (
               <button

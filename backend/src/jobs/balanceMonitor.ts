@@ -4,7 +4,9 @@ import { socketService } from '../services/socketService';
 import { packageService } from '../services/packageService';
 import { billingService } from '../services/billingService';
 import { agoraRecordingService } from '../services/agoraRecordingService';
+import { agoraChannelService } from '../services/agoraChannelService';
 import { logger } from '../logger';
+import { IS_MVP_MODE } from '../config/mvpConfig';
 
 interface GracePeriodState {
   sessionId: string;
@@ -20,6 +22,8 @@ class BalanceMonitorJob {
   private sessionLastCheck = new Map<string, number>();
   // Map of sessionId -> accumulated participant-seconds (prevents fractional minute rounding inflation)
   private sessionAccumulatedSec = new Map<string, number>();
+  // Map of sessionId -> total lifetime participant-seconds accumulated during session
+  private sessionTotalParticipantSec = new Map<string, number>();
 
   /**
    * Main periodic monitor loop. Runs every 15 seconds for responsive in-stream warnings and overage execution.
@@ -55,8 +59,17 @@ class BalanceMonitorJob {
         const hostId = session.facilitatorId;
         const host = session.facilitator;
 
-        // Determine audience count from live socket room or fallback to 1 (host alone)
-        const activeAudienceCount = Math.max(1, socketService ? socketService.getAudienceCount(sessionId) : 1);
+        // Determine audience count from live socket room, fallback to recorded participantCount or 1
+        const socketCount = socketService ? socketService.getAudienceCount(sessionId) : 0;
+        const activeAudienceCount = Math.max(1, socketCount, session.participantCount || 0);
+
+        // Update peak participant count in DB if new peak reached
+        if (activeAudienceCount > (session.participantCount || 0)) {
+          await prisma.session.update({
+            where: { id: sessionId },
+            data: { participantCount: activeAudienceCount },
+          }).catch(() => null);
+        }
 
         // ── Exact time delta (cap at 60s to prevent missed-check catch-up spikes) ──
         const lastCheckTime = this.sessionLastCheck.get(sessionId) || now;
@@ -66,6 +79,11 @@ class BalanceMonitorJob {
 
         // ── Accumulate participant-seconds; deduct only whole completed participant-minutes ──
         const participantSec = deltaSec * activeAudienceCount;
+        this.sessionTotalParticipantSec.set(
+          sessionId,
+          (this.sessionTotalParticipantSec.get(sessionId) || 0) + participantSec
+        );
+
         const accumulated = (this.sessionAccumulatedSec.get(sessionId) || 0) + participantSec;
         const minutesToDeduct = Math.floor(accumulated / 60);
         this.sessionAccumulatedSec.set(sessionId, accumulated % 60);
@@ -94,6 +112,11 @@ class BalanceMonitorJob {
 
         // ── PATH A: Balance Hits Zero ──────────────────────────────────────────
         if (isDepleted) {
+          // In MVP mode: do not cut off active streams!
+          if (IS_MVP_MODE) {
+            continue;
+          }
+
           const hasCard = Boolean(host.stripePaymentMethodId && host.stripeCustomerId);
           const hasConsent = host.overageConsent;
 
@@ -224,11 +247,26 @@ class BalanceMonitorJob {
         }
       }
 
+      // 1. Kick all participants on Agora RTC server-side to terminate channel immediately
+      await agoraChannelService.kickAllFromChannel(session.channelName);
+
+      // 2. Broadcast stream ended to any connected sockets
+      socketService?.broadcastStreamEnded(session.id, 'This live session has concluded.');
+
       const endedAt = new Date();
       const startedAt = session.startedAt || session.createdAt;
       const durationMs = endedAt.getTime() - startedAt.getTime();
-      // Store exact elapsed minutes (not ceiled) so analytics matches billing
-      const totalMinutes = Math.round(durationMs / 60000);
+      const wallClockMinutes = Math.max(1, Math.round(durationMs / 60000));
+      const peakParticipants = Math.max(1, session.participantCount || 1);
+
+      // Total Participant-Minutes matching Agora RTC billable minutes:
+      const lifetimeSec = this.sessionTotalParticipantSec.get(session.id) || 0;
+      const accumulatedParticipantMins = Math.round(lifetimeSec / 60);
+      const totalMinutes = Math.max(
+        wallClockMinutes,
+        accumulatedParticipantMins,
+        Math.round((durationMs * peakParticipants) / 60000)
+      );
 
       await prisma.session.update({
         where: { id: session.id },
@@ -236,18 +274,30 @@ class BalanceMonitorJob {
           status: 'ended',
           endedAt,
           totalMinutes,
+          participantCount: peakParticipants,
           recordingUrl,
         },
       });
 
       // Clean up accumulator state for this session
-      this.sessionLastCheck.delete(session.id);
-      this.sessionAccumulatedSec.delete(session.id);
+      this.cleanupSession(session.id);
 
-      logger.info(`[BalanceMonitor] Session ${session.id} ended gracefully due to billing balance limits.`);
+      logger.info(`[BalanceMonitor] Session ${session.id} ended gracefully. Total participant-minutes: ${totalMinutes} (Wall-clock: ${wallClockMinutes}m, Peak: ${peakParticipants})`);
     } catch (e: any) {
       logger.error({ e }, `[BalanceMonitor] Failed to end session ${session.id} gracefully`);
     }
+  }
+
+  public getSessionParticipantMinutes(sessionId: string): number {
+    const totalSec = this.sessionTotalParticipantSec.get(sessionId) || 0;
+    return Math.round(totalSec / 60);
+  }
+
+  public cleanupSession(sessionId: string) {
+    this.sessionLastCheck.delete(sessionId);
+    this.sessionAccumulatedSec.delete(sessionId);
+    this.sessionTotalParticipantSec.delete(sessionId);
+    this.activeGracePeriods.delete(sessionId);
   }
 
   /**

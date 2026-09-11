@@ -6,6 +6,10 @@ import { agoraChatService } from '../services/agoraChatService';
 import { stripeService } from '../services/stripeService';
 import { packageService } from '../services/packageService';
 import { billingService } from '../services/billingService';
+import { agoraChannelService } from '../services/agoraChannelService';
+import { socketService } from '../services/socketService';
+import { balanceMonitorJob } from '../jobs/balanceMonitor';
+import { IS_MVP_MODE, MAX_ROOM_CAPACITY } from '../config/mvpConfig';
 
 export const EARLY_START_BUFFER_MINUTES = 15;
 export const EARLY_START_BUFFER_MS = EARLY_START_BUFFER_MINUTES * 60 * 1000;
@@ -63,8 +67,16 @@ export const createEvent = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Title and start date/time are required' });
     }
 
-    // Check if user has selected a host billing package (Free, Starter, Growth, Scale)
-    if (user.role !== 'admin' && user.role !== 'super_admin') {
+    // Strict MVP Policy: Only designated hosts and admins can create events
+    if (user.role !== 'host' && user.role !== 'admin' && user.role !== 'super_admin') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Attendee accounts cannot create or host events. Only designated host accounts can host events.',
+      });
+    }
+
+    // In production, check if host has selected a package. In MVP mode, all designated hosts can create events freely.
+    if (!IS_MVP_MODE && user.role !== 'admin' && user.role !== 'super_admin') {
       const hostUser = await prisma.user.findUnique({ where: { id: userId } });
       if (!hostUser?.billingPackageId && hostUser?.packageMinutesTotal === 0) {
         return res.status(403).json({
@@ -75,11 +87,8 @@ export const createEvent = async (req: Request, res: Response) => {
       }
     }
 
-    // Automatically elevate user role to host if creating an event
-    await prisma.user.update({
-      where: { id: userId },
-      data: { role: user.role === 'admin' || user.role === 'super_admin' ? user.role : 'host' },
-    }).catch(() => null);
+    // Strict MVP Limit: Maximum 45 participants per event (host included)
+    const effectiveCapacity = capacity ? Math.min(parseInt(capacity, 10), MAX_ROOM_CAPACITY) : MAX_ROOM_CAPACITY;
 
     const event = await prisma.event.create({
       data: {
@@ -87,7 +96,7 @@ export const createEvent = async (req: Request, res: Response) => {
         description: description || null,
         startsAt: new Date(startsAt),
         priceCents: Math.max(0, parseInt(priceCents, 10) || 0),
-        capacity: capacity ? parseInt(capacity, 10) : null,
+        capacity: effectiveCapacity,
         facilitatorId: userId,
         status: 'draft',
       },
@@ -344,8 +353,8 @@ export const createTicketCheckout = async (req: Request, res: Response) => {
       });
     }
 
-    // If free event ($0), instantly issue paid ticket without Stripe
-    if (event.priceCents === 0) {
+    // In MVP mode OR free event ($0), instantly issue paid ticket without Stripe
+    if (IS_MVP_MODE || event.priceCents === 0) {
       const ticket = await prisma.ticket.create({
         data: {
           eventId: id as string,
@@ -355,7 +364,7 @@ export const createTicketCheckout = async (req: Request, res: Response) => {
         },
       });
       return res.json({
-        message: 'Free ticket registered successfully',
+        message: IS_MVP_MODE ? 'MVP Beta Pass: Ticket registered free without payment' : 'Free ticket registered successfully',
         ticket,
         isFree: true,
       });
@@ -448,7 +457,7 @@ export const startEvent = async (req: Request, res: Response) => {
 
     // ── Billing Package & Balance Check ────────────────────────────────────
     const isSuperOrAdmin = (req as any).user?.role === 'admin' || (req as any).user?.role === 'super_admin';
-    if (!isSuperOrAdmin) {
+    if (!isSuperOrAdmin && !IS_MVP_MODE) {
       const hostUser = await prisma.user.findUnique({ where: { id: userId } });
       if (!hostUser?.billingPackageId && (hostUser?.packageMinutesTotal || 0) === 0) {
         return res.status(403).json({
@@ -698,6 +707,25 @@ export const joinEvent = async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Live session not initialized for this event' });
     }
 
+    // ── Participant Cap Enforcement (Max 45 participants including host) ───
+    // Admins and super_admins bypass the limit so they can always observe/moderate.
+    if (userRole !== 'admin' && userRole !== 'super_admin' && !isHost) {
+      const socketCount = socketService ? socketService.getAudienceCount(session.id) : 0;
+      const currentParticipants = Math.max(socketCount, session.participantCount ?? 0);
+
+      const effectiveLimit = Math.min(event.capacity || MAX_ROOM_CAPACITY, MAX_ROOM_CAPACITY);
+
+      if (currentParticipants >= effectiveLimit) {
+        return res.status(403).json({
+          error: 'Event is full',
+          capacity: effectiveLimit,
+          currentParticipants,
+          message: `This live event has reached its maximum capacity of ${effectiveLimit} participants (including host).`,
+        });
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     // Both host and attendees use publisher-role tokens in RTC mode.
     // In rtc mode, all participants must join with publisher tokens — subscriber
     // tokens can cause join failures or prevent track subscription in agora-rtc-react.
@@ -820,8 +848,34 @@ export const endEvent = async (req: Request, res: Response) => {
     if (event.session) {
       const startedAt = event.session.startedAt || event.session.createdAt;
       const durationMs = endedAt.getTime() - startedAt.getTime();
-      // Use Math.round so analytics totalMinutes matches billing deduction math
-      const totalMinutes = Math.round(durationMs / 60000);
+      const wallClockMinutes = Math.max(1, Math.round(durationMs / 60000));
+
+      // 1. Forcefully terminate the Agora RTC channel on Agora server-side
+      // to ensure all attendees are disconnected and no extra minutes are billed to platform
+      await agoraChannelService.kickAllFromChannel(event.session.channelName);
+
+      // 2. Broadcast stream_ended to all connected sockets in the session
+      socketService?.broadcastStreamEnded(event.session.id, 'This live event has concluded.');
+
+      // 3. Count paid tickets/attendees to determine participant count
+      const paidTicketsCount = await prisma.ticket.count({
+        where: { eventId: id as string, status: 'paid' },
+      });
+      const socketAudienceCount = socketService ? socketService.getAudienceCount(event.session.id) : 0;
+      const peakParticipants = Math.max(
+        1,
+        event.session.participantCount || 0,
+        socketAudienceCount,
+        paidTicketsCount > 0 ? paidTicketsCount + 1 : 1
+      );
+
+      // 4. Calculate total participant-minutes (matching Agora RTC billable minutes)
+      const accumulatedMins = balanceMonitorJob.getSessionParticipantMinutes(event.session.id);
+      const totalMinutes = Math.max(
+        wallClockMinutes,
+        accumulatedMins,
+        Math.round((durationMs * peakParticipants) / 60000)
+      );
 
       await prisma.session.update({
         where: { id: event.session.id },
@@ -829,9 +883,12 @@ export const endEvent = async (req: Request, res: Response) => {
           status: 'ended',
           endedAt,
           totalMinutes,
+          participantCount: peakParticipants,
           recordingUrl,
         },
       });
+
+      balanceMonitorJob.cleanupSession(event.session.id);
     }
 
     const updatedEvent = await prisma.event.update({
@@ -1010,10 +1067,13 @@ export const getHostAnalytics = async (req: Request, res: Response) => {
     let upcomingEventsCount = 0;
     let completedEventsCount = 0;
 
-    // Calculate total live broadcast minutes across all sessions
+    // Calculate total live broadcast minutes across all sessions (wall-clock time)
     let totalBroadcastMinutes = 0;
     for (const sess of allHostSessions) {
-      if (sess.totalMinutes && sess.totalMinutes > 0) {
+      if (sess.startedAt && sess.endedAt) {
+        const wallClock = Math.round((sess.endedAt.getTime() - sess.startedAt.getTime()) / 60000);
+        totalBroadcastMinutes += Math.max(1, wallClock);
+      } else if (sess.totalMinutes && sess.totalMinutes > 0) {
         totalBroadcastMinutes += sess.totalMinutes;
       }
     }

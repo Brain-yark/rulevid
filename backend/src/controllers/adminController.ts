@@ -4,6 +4,7 @@ import { prisma } from '../db';
 import { billingService } from '../services/billingService';
 import { UserRole } from '@shared/types';
 import { logger } from '../logger';
+import { MAX_HOST_ACCOUNTS } from '../config/mvpConfig';
 
 export const getOverviewStats = async (req: Request, res: Response) => {
   try {
@@ -145,6 +146,9 @@ export const getUsers = async (req: Request, res: Response) => {
           emailVerified: true,
           lastLoginAt: true,
           createdAt: true,
+          packageMinutesTotal: true,
+          packageMinutesUsed: true,
+          billingPackage: true,
           _count: {
             select: {
               sessions: true,
@@ -190,6 +194,19 @@ export const updateUserRole = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Strict MVP Limit: Maximum 3 host accounts allowed on the system
+    if (role === 'host' && targetUser.role !== 'host') {
+      const currentHostCount = await prisma.user.count({
+        where: { role: 'host', id: { not: id } },
+      });
+      if (currentHostCount >= MAX_HOST_ACCOUNTS) {
+        return res.status(400).json({
+          error: 'Host limit reached',
+          message: `In MVP mode, a maximum of ${MAX_HOST_ACCOUNTS} host accounts are allowed on the platform. Please demote or delete an existing host first.`,
+        });
+      }
+    }
+
     // Provision Lago wallet if promoted to host/admin/super_admin and doesn't have one
     let walletId = targetUser.walletId;
     if ((role === 'host' || role === 'admin' || role === 'super_admin') && !walletId) {
@@ -201,12 +218,20 @@ export const updateUserRole = async (req: Request, res: Response) => {
       }
     }
 
+    const updateData: any = {
+      role,
+      ...(walletId ? { walletId } : {}),
+    };
+
+    // Auto-allocate test minutes if promoted to host
+    if (role === 'host' && (targetUser.packageMinutesTotal || 0) < 10000) {
+      updateData.packageMinutesTotal = 100000;
+      updateData.packageMinutesUsed = 0;
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: {
-        role,
-        ...(walletId ? { walletId } : {}),
-      },
+      data: updateData,
       select: {
         id: true,
         email: true,
@@ -215,6 +240,8 @@ export const updateUserRole = async (req: Request, res: Response) => {
         status: true,
         walletId: true,
         companyName: true,
+        packageMinutesTotal: true,
+        packageMinutesUsed: true,
       },
     });
 
@@ -227,6 +254,147 @@ export const updateUserRole = async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error({ error }, '[Admin] updateUserRole error');
     return res.status(500).json({ error: 'Failed to update user role' });
+  }
+};
+
+/**
+ * Super Admin: Directly create a host account (subject to 3-host limit)
+ */
+export const createHostUser = async (req: Request, res: Response) => {
+  try {
+    const { email, password, name, companyName } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    const currentHostCount = await prisma.user.count({ where: { role: 'host' } });
+    if (currentHostCount >= MAX_HOST_ACCOUNTS) {
+      return res.status(400).json({
+        error: 'Host limit reached',
+        message: `In MVP mode, a maximum of ${MAX_HOST_ACCOUNTS} host accounts are allowed on the platform. Please demote or delete an existing host first.`,
+      });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (existing) {
+      return res.status(400).json({ error: 'An account with this email already exists' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const hostUser = await prisma.user.create({
+      data: {
+        email: email.toLowerCase().trim(),
+        passwordHash,
+        name: name?.trim() || null,
+        companyName: companyName?.trim() || null,
+        role: 'host',
+        status: 'active',
+        emailVerified: true,
+        packageMinutesTotal: 100000,
+        packageMinutesUsed: 0,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        status: true,
+        companyName: true,
+        packageMinutesTotal: true,
+        packageMinutesUsed: true,
+        createdAt: true,
+      },
+    });
+
+    logger.info(`[Admin] Host account created manually: ${hostUser.email}`);
+    return res.status(201).json({
+      message: `Host account ${hostUser.email} created successfully (${currentHostCount + 1}/${MAX_HOST_ACCOUNTS} active hosts).`,
+      user: hostUser,
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] createHostUser error');
+    return res.status(500).json({ error: 'Failed to create host account' });
+  }
+};
+
+/**
+ * Super Admin: Permanently delete an account off the system with cascading cleanup
+ */
+export const deleteUser = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const callerId = (req as any).user?.userId;
+
+    if (id === callerId) {
+      return res.status(400).json({ error: 'Cannot delete your own account while logged in' });
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        eventsHosted: {
+          include: { tickets: true, session: true },
+        },
+        sessions: true,
+      },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (targetUser.role === 'super_admin') {
+      const superAdminCount = await prisma.user.count({ where: { role: 'super_admin' } });
+      if (superAdminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the only Super Admin account on the system' });
+      }
+    }
+
+    // Execute atomic cascading deletion
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete user usage records & overage charges & transactions
+      await tx.usageRecord.deleteMany({ where: { userId: id } });
+      await tx.overageCharge.deleteMany({ where: { userId: id } });
+      await tx.transaction.deleteMany({ where: { userId: id } });
+
+      // 2. Delete user tickets (as attendee)
+      await tx.ticket.deleteMany({ where: { userId: id } });
+
+      // 3. Delete hosted events and their associated tickets/sessions
+      for (const event of targetUser.eventsHosted) {
+        await tx.ticket.deleteMany({ where: { eventId: event.id } });
+        if (event.sessionId) {
+          await tx.usageRecord.deleteMany({ where: { sessionId: event.sessionId } });
+          await tx.event.update({ where: { id: event.id }, data: { sessionId: null } });
+          await tx.session.delete({ where: { id: event.sessionId } }).catch(() => null);
+        }
+        await tx.event.delete({ where: { id: event.id } });
+      }
+
+      // 4. Delete user standalone sessions
+      for (const session of targetUser.sessions) {
+        await tx.usageRecord.deleteMany({ where: { sessionId: session.id } });
+        await tx.session.delete({ where: { id: session.id } }).catch(() => null);
+      }
+
+      // 5. Delete the user
+      await tx.user.delete({ where: { id } });
+    });
+
+    logger.info(`[Admin] User ${targetUser.email} (${id}) permanently deleted by admin ${callerId}`);
+
+    return res.json({
+      message: `User account ${targetUser.email} and all associated records have been permanently deleted`,
+      deletedUserId: id,
+    });
+  } catch (error: any) {
+    logger.error({ error }, '[Admin] deleteUser error');
+    return res.status(500).json({ error: 'Failed to delete user account: ' + (error.message || 'Internal error') });
   }
 };
 
@@ -427,11 +595,14 @@ export const updateAdminPackage = async (req: Request, res: Response) => {
     const {
       name,
       participantMinutes,
+      maxParticipantsPerSession,
       priceCents,
       effectiveRatePer1k,
       roughlyCovers,
       overageBlockCents,
       overageBlockMinutes,
+      hasRecording,
+      hasAutoOverage,
       description,
       isActive,
       isCustom,
@@ -447,11 +618,14 @@ export const updateAdminPackage = async (req: Request, res: Response) => {
       data: {
         ...(name !== undefined ? { name } : {}),
         ...(participantMinutes !== undefined ? { participantMinutes: parseInt(participantMinutes, 10) } : {}),
+        ...(maxParticipantsPerSession !== undefined ? { maxParticipantsPerSession: parseInt(maxParticipantsPerSession, 10) } : {}),
         ...(priceCents !== undefined ? { priceCents: parseInt(priceCents, 10) } : {}),
         ...(effectiveRatePer1k !== undefined ? { effectiveRatePer1k } : {}),
         ...(roughlyCovers !== undefined ? { roughlyCovers } : {}),
         ...(overageBlockCents !== undefined ? { overageBlockCents: parseInt(overageBlockCents, 10) } : {}),
         ...(overageBlockMinutes !== undefined ? { overageBlockMinutes: parseInt(overageBlockMinutes, 10) } : {}),
+        ...(hasRecording !== undefined ? { hasRecording: Boolean(hasRecording) } : {}),
+        ...(hasAutoOverage !== undefined ? { hasAutoOverage: Boolean(hasAutoOverage) } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
         ...(isCustom !== undefined ? { isCustom: Boolean(isCustom) } : {}),
@@ -475,11 +649,14 @@ export const createAdminPackage = async (req: Request, res: Response) => {
       name,
       slug,
       participantMinutes,
+      maxParticipantsPerSession = 10,
       priceCents,
       effectiveRatePer1k,
       roughlyCovers,
       overageBlockCents = 1000,
       overageBlockMinutes = 10000,
+      hasRecording = false,
+      hasAutoOverage = false,
       description,
       isActive = true,
       isCustom = false,
@@ -494,11 +671,14 @@ export const createAdminPackage = async (req: Request, res: Response) => {
         name,
         slug: slug.toLowerCase().trim(),
         participantMinutes: parseInt(participantMinutes, 10),
+        maxParticipantsPerSession: parseInt(maxParticipantsPerSession, 10),
         priceCents: parseInt(priceCents, 10),
         effectiveRatePer1k,
         roughlyCovers,
         overageBlockCents: parseInt(overageBlockCents, 10),
         overageBlockMinutes: parseInt(overageBlockMinutes, 10),
+        hasRecording: Boolean(hasRecording),
+        hasAutoOverage: Boolean(hasAutoOverage),
         description,
         isActive: Boolean(isActive),
         isCustom: Boolean(isCustom),

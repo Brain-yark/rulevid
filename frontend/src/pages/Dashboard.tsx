@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  Plus, 
   Play, 
   Calendar, 
   Users, 
@@ -34,6 +33,7 @@ interface Session {
 interface DashboardProps {
   onJoinRoom: (sessionId: string) => void;
   onGoToWallet: () => void;
+  onNavigateToEvents?: () => void;
 }
 
 // ── Inline Toast System ─────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ const useDashToast = () => {
 };
 // ────────────────────────────────────────────────────────────────────────────
 
-const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
+const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet, onNavigateToEvents }) => {
   const [balance, setBalance] = useState<number | null>(null);
   const [packageStatus, setPackageStatus] = useState<UserPackageStatus | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -220,13 +220,55 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
       <header className="dashboard-header">
         <div>
           <h1>Welcome back, {displayName}</h1>
-          <p className="subtitle">Manage your streaming sessions and participants</p>
+          <p className="subtitle">Host Studio — Manage and broadcast your scheduled live experiences</p>
         </div>
-        <button className="create-session-btn" onClick={() => setIsModalOpen(true)}>
-          <Plus size={20} />
-          Create Session
-        </button>
+        {onNavigateToEvents && (
+          <button className="create-session-btn" onClick={onNavigateToEvents}>
+            <Calendar size={18} />
+            Events Studio
+          </button>
+        )}
       </header>
+
+      {/* MVP Notice */}
+      <div className="glass-card" style={{
+        padding: '0.85rem 1.25rem',
+        marginBottom: '1.5rem',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '1rem',
+        borderLeft: '4px solid var(--primary)',
+        background: 'rgba(99, 102, 241, 0.08)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Sparkles size={20} className="text-primary" />
+          <div>
+            <strong style={{ fontSize: '0.92rem' }}>MVP Mode Active: Scheduled Events Only</strong>
+            <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Hosts exclusively host scheduled Events with up to 45 participants. Ad-hoc sessions are disabled for MVP testing.
+            </p>
+          </div>
+        </div>
+        {onNavigateToEvents && (
+          <button
+            onClick={onNavigateToEvents}
+            style={{
+              padding: '0.45rem 0.95rem',
+              borderRadius: '8px',
+              border: '1px solid rgba(99, 102, 241, 0.4)',
+              background: 'rgba(99, 102, 241, 0.2)',
+              color: '#c7d2fe',
+              fontWeight: 600,
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Create or Manage Events →
+          </button>
+        )}
+      </div>
 
       {/* ── Stats Grid with Host Package Card ── */}
       <div className="stats-grid">
@@ -261,7 +303,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
             <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
               {packageStatus?.packageMinutesRemaining !== undefined
                 ? `${packageStatus.packageMinutesRemaining.toLocaleString()} mins left`
-                : '3,000 mins included'}
+                : `${packageStatus?.package?.participantMinutes?.toLocaleString() || '1,000'} mins included`}
+            </span>
+            <span style={{ fontSize: '0.73rem', color: '#a5b4fc', marginTop: '0.15rem', display: 'block' }}>
+              Up to {packageStatus?.package?.maxParticipantsPerSession ?? 10} participants / session
             </span>
           </div>
         </div>
@@ -396,7 +441,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
 
             {/* Host Package Status Banner */}
             <div className="session-balance-banner">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
                 <Sparkles size={16} color="#818cf8" />
                 <span>
                   Host Plan: <strong>{packageStatus?.package?.name || 'Standard'}</strong>
@@ -405,6 +450,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onJoinRoom, onGoToWallet }) => {
                   {packageStatus?.packageMinutesRemaining !== undefined
                     ? `${packageStatus.packageMinutesRemaining.toLocaleString()} mins available`
                     : 'Minutes Active'}
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  (Max {packageStatus?.package?.maxParticipantsPerSession ?? 10} participants / session)
                 </span>
               </div>
               <button 

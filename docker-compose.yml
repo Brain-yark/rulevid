@@ -44,6 +44,9 @@ services:
       STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
       LAGO_API_URL: "${LAGO_API_URL:-http://localhost:3000}"
       LAGO_API_KEY: "${LAGO_API_KEY:-}"
+      MVP_MODE: "true"
+      MAX_ROOM_CAPACITY: "45"
+      MAX_HOST_ACCOUNTS: "3"
     depends_on:
       db:
         condition: service_healthy

@@ -364,10 +364,12 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
               : 'Browse scheduled sessions, reserve access tickets, and join interactive live video events.'}
           </p>
         </div>
-        <button className="primary-btn pulse-on-hover" onClick={handleHostEventClick}>
-          <Plus size={18} />
-          <span>{isHost ? 'Create Event' : 'Host an Event'}</span>
-        </button>
+        {isHost && (
+          <button className="primary-btn pulse-on-hover" onClick={handleHostEventClick}>
+            <Plus size={18} />
+            <span>Create Event</span>
+          </button>
+        )}
       </div>
 
       {/* ── Returned Statistic Bar (Start Cards) for All Roles ── */}
@@ -785,15 +787,28 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
               </div>
 
               <div className="form-group">
-                <label>Seat Capacity (Optional)</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label>Seat Capacity (Optional)</label>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Host Plan Limit: <strong>{storedUser?.billingPackage?.maxParticipantsPerSession ?? 10}</strong> max concurrent
+                  </span>
+                </div>
                 <input
                   type="number"
                   min="1"
-                  placeholder="Leave empty for unlimited seats"
+                  placeholder="Leave empty for open seating"
                   value={newCapacity}
                   onChange={(e) => setNewCapacity(e.target.value)}
                 />
-                <span className="form-hint">Cap the number of paid tickets available to create urgency.</span>
+                {newCapacity && parseInt(newCapacity, 10) > (storedUser?.billingPackage?.maxParticipantsPerSession ?? 10) && (
+                  <div style={{ marginTop: '0.35rem', padding: '0.4rem 0.6rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#fbbf24', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <AlertTriangle size={14} />
+                    <span>
+                      Notice: Your current plan caps live sessions at {storedUser?.billingPackage?.maxParticipantsPerSession ?? 10} concurrent participants. Upgrade your plan if you anticipate more attendees simultaneously.
+                    </span>
+                  </div>
+                )}
+                <span className="form-hint">Cap the number of tickets available. Concurrent live attendees cannot exceed your plan cap.</span>
               </div>
 
               <div className="modal-actions">

@@ -14,6 +14,8 @@ import {
   createAdminPackage,
   getAllOverages,
   updateUserBilling,
+  createHostUser,
+  deleteUser,
 } from '../controllers/adminController';
 
 const router = Router();
@@ -27,6 +29,8 @@ router.use(requireRole(['admin', 'super_admin']) as unknown as RequestHandler);
 
 router.get('/overview', getOverviewStats as unknown as RequestHandler);
 router.get('/users', getUsers as unknown as RequestHandler);
+router.post('/users/create-host', createHostUser as unknown as RequestHandler);
+router.delete('/users/:id', deleteUser as unknown as RequestHandler);
 router.patch('/users/:id/role', updateUserRole as unknown as RequestHandler);
 router.patch('/users/:id/status', updateUserStatus as unknown as RequestHandler);
 router.patch('/users/:id/billing', updateUserBilling as unknown as RequestHandler);

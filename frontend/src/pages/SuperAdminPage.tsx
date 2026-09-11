@@ -17,6 +17,9 @@ import {
   Plus,
   Zap,
   X,
+  Trash2,
+  UserPlus,
+  AlertTriangle,
 } from 'lucide-react';
 import { API_BASE } from '../config';
 import { useToast } from '../context/ToastContext';
@@ -130,11 +133,14 @@ interface AdminBillingPackage {
   name: string;
   slug: string;
   participantMinutes: number;
+  maxParticipantsPerSession: number;
   priceCents: number;
   effectiveRatePer1k?: string;
   roughlyCovers?: string;
   overageBlockCents: number;
   overageBlockMinutes: number;
+  hasRecording: boolean;
+  hasAutoOverage: boolean;
   description?: string;
   isActive: boolean;
   isCustom: boolean;
@@ -185,21 +191,43 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
   const [userSearchQuery, setUserSearchQuery] = useState<string>('');
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
 
+  // User Deletion & Host Provisioning State
+  const [deleteTargetUser, setDeleteTargetUser] = useState<AdminUser | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [isCreateHostModalOpen, setIsCreateHostModalOpen] = useState(false);
+  const [isCreatingHost, setIsCreatingHost] = useState(false);
+  const [newHostEmail, setNewHostEmail] = useState('');
+  const [newHostPassword, setNewHostPassword] = useState('');
+  const [newHostName, setNewHostName] = useState('');
+  const [newHostCompany, setNewHostCompany] = useState('');
+
   // Package Editing & Creating State
   const [editingPackage, setEditingPackage] = useState<AdminBillingPackage | null>(null);
   const [isCreatingPackage, setIsCreatingPackage] = useState(false);
   const [pkgName, setPkgName] = useState('');
   const [pkgSlug, setPkgSlug] = useState('');
-  const [pkgMinutes, setPkgMinutes] = useState('30000');
-  const [pkgPriceUsd, setPkgPriceUsd] = useState('30');
-  const [pkgEffectiveRate, setPkgEffectiveRate] = useState('$1.00/1k');
-  const [pkgRoughlyCovers, setPkgRoughlyCovers] = useState('~10 events of 50 attendees/hr');
+  const [pkgMinutes, setPkgMinutes] = useState('1000');
+  const [pkgMaxParticipants, setPkgMaxParticipants] = useState('10');
+  const [pkgPriceUsd, setPkgPriceUsd] = useState('0');
+  const [pkgEffectiveRate, setPkgEffectiveRate] = useState('—');
+  const [pkgRoughlyCovers, setPkgRoughlyCovers] = useState('~1 small test event (e.g. 10 min, 10 attendees)');
   const [pkgOverageBlockUsd, setPkgOverageBlockUsd] = useState('10');
   const [pkgOverageBlockMins, setPkgOverageBlockMins] = useState('10000');
+  const [pkgHasRecording, setPkgHasRecording] = useState(false);
+  const [pkgHasAutoOverage, setPkgHasAutoOverage] = useState(false);
   const [pkgDescription, setPkgDescription] = useState('');
   const [pkgIsActive, setPkgIsActive] = useState(true);
   const [pkgIsCustom, setPkgIsCustom] = useState(false);
   const [isSavingPkg, setIsSavingPkg] = useState(false);
+
+  const currentUser = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || '{}');
+    } catch {
+      return {};
+    }
+  })();
+  const isSuperAdmin = currentUser?.role === 'super_admin';
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('auth_token');
@@ -384,6 +412,64 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
     }
   };
 
+  const handleDeleteUser = async () => {
+    if (!deleteTargetUser) return;
+    setIsDeletingUser(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/users/${deleteTargetUser.id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete user account');
+
+      toast.success('User Deleted', `Account ${deleteTargetUser.email} has been permanently deleted from the system.`);
+      setDeleteTargetUser(null);
+      fetchUsers();
+      fetchOverview();
+    } catch (err: any) {
+      toast.error('Deletion Failed', err.message);
+    } finally {
+      setIsDeletingUser(false);
+    }
+  };
+
+  const handleCreateHostSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newHostEmail.trim() || !newHostPassword.trim()) {
+      toast.error('Missing Fields', 'Email and password are required.');
+      return;
+    }
+    setIsCreatingHost(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/users/create-host`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          email: newHostEmail.trim(),
+          password: newHostPassword.trim(),
+          name: newHostName.trim() || undefined,
+          companyName: newHostCompany.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create host account');
+
+      toast.success('Host Created', data.message);
+      setIsCreateHostModalOpen(false);
+      setNewHostEmail('');
+      setNewHostPassword('');
+      setNewHostName('');
+      setNewHostCompany('');
+      fetchUsers();
+      fetchOverview();
+    } catch (err: any) {
+      toast.error('Creation Failed', err.message);
+    } finally {
+      setIsCreatingHost(false);
+    }
+  };
+
   // ── Package CRUD Operations ──
   const openEditPackage = (pkg: AdminBillingPackage) => {
     setEditingPackage(pkg);
@@ -391,11 +477,14 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
     setPkgName(pkg.name);
     setPkgSlug(pkg.slug);
     setPkgMinutes(pkg.participantMinutes.toString());
+    setPkgMaxParticipants((pkg.maxParticipantsPerSession ?? 10).toString());
     setPkgPriceUsd((pkg.priceCents / 100).toString());
     setPkgEffectiveRate(pkg.effectiveRatePer1k || '');
     setPkgRoughlyCovers(pkg.roughlyCovers || '');
     setPkgOverageBlockUsd((pkg.overageBlockCents / 100).toString());
     setPkgOverageBlockMins(pkg.overageBlockMinutes.toString());
+    setPkgHasRecording(Boolean(pkg.hasRecording));
+    setPkgHasAutoOverage(Boolean(pkg.hasAutoOverage));
     setPkgDescription(pkg.description || '');
     setPkgIsActive(pkg.isActive);
     setPkgIsCustom(pkg.isCustom);
@@ -406,12 +495,15 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
     setIsCreatingPackage(true);
     setPkgName('');
     setPkgSlug('');
-    setPkgMinutes('50000');
-    setPkgPriceUsd('49');
-    setPkgEffectiveRate('$0.98/1k');
-    setPkgRoughlyCovers('~20 events of 50 attendees/hr');
+    setPkgMinutes('15000');
+    setPkgMaxParticipants('50');
+    setPkgPriceUsd('30');
+    setPkgEffectiveRate('$2.00/1k');
+    setPkgRoughlyCovers('~5 events of 50 attendees/hr');
     setPkgOverageBlockUsd('10');
     setPkgOverageBlockMins('10000');
+    setPkgHasRecording(true);
+    setPkgHasAutoOverage(true);
     setPkgDescription('Custom package tier tailored for live video hosts.');
     setPkgIsActive(true);
     setPkgIsCustom(false);
@@ -419,23 +511,31 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
 
   const handleSavePackageSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isSuperAdmin) {
+      toast.error('Permission Denied', 'Only super administrators can edit or create billing packages.');
+      return;
+    }
     setIsSavingPkg(true);
 
     try {
       const priceCents = Math.round(parseFloat(pkgPriceUsd || '0') * 100);
       const overageBlockCents = Math.round(parseFloat(pkgOverageBlockUsd || '10') * 100);
       const participantMinutes = parseInt(pkgMinutes, 10);
+      const maxParticipantsPerSession = parseInt(pkgMaxParticipants, 10) || 10;
       const overageBlockMinutes = parseInt(pkgOverageBlockMins, 10);
 
       const payload = {
         name: pkgName.trim(),
         slug: pkgSlug.trim().toLowerCase(),
         participantMinutes,
+        maxParticipantsPerSession,
         priceCents,
         effectiveRatePer1k: pkgEffectiveRate.trim() || undefined,
         roughlyCovers: pkgRoughlyCovers.trim() || undefined,
         overageBlockCents,
         overageBlockMinutes,
+        hasRecording: pkgHasRecording,
+        hasAutoOverage: pkgHasAutoOverage,
         description: pkgDescription.trim() || undefined,
         isActive: pkgIsActive,
         isCustom: pkgIsCustom,
@@ -679,10 +779,12 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                   <strong>{overageSummary?.totalChargesCount || 0} events (${(overageSummary?.totalOverageRevenueUsd || 0).toFixed(2)})</strong>
                 </div>
               </div>
-              <button className="create-pkg-btn" onClick={openCreatePackage}>
-                <Plus size={18} />
-                <span>Create New Tier</span>
-              </button>
+              {isSuperAdmin && (
+                <button className="create-pkg-btn" onClick={openCreatePackage}>
+                  <Plus size={18} />
+                  <span>Create New Tier</span>
+                </button>
+              )}
             </div>
 
             {/* Packages Grid / Table */}
@@ -693,7 +795,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                   <h3>Host Package Marketplace Configuration</h3>
                 </div>
                 <span className="th-note">
-                  Super Admins can edit rates, minutes, and pricing anytime. Updates reflect immediately across the landing page and host signup.
+                  Super Admins can edit rates, minutes, capacity limits, and features anytime. Updates reflect immediately across host registration and room joins.
                 </span>
               </div>
 
@@ -725,6 +827,11 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                       <span><strong>{pkg.participantMinutes.toLocaleString()}</strong> participant-minutes</span>
                     </div>
 
+                    <div className="admin-pkg-minutes-row" style={{ marginTop: '0.25rem' }}>
+                      <Users size={15} />
+                      <span><strong>{pkg.maxParticipantsPerSession ? pkg.maxParticipantsPerSession.toLocaleString() : '10'}</strong> max participants / session</span>
+                    </div>
+
                     <div className="admin-pkg-coverage">
                       <span>Covers: {pkg.roughlyCovers || '—'}</span>
                     </div>
@@ -736,7 +843,19 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                       </div>
                       <div className="meta-cell">
                         <span className="meta-lbl">Auto-Overage</span>
-                        <span className="meta-val">${pkg.overageBlockCents / 100} / {pkg.overageBlockMinutes.toLocaleString()}m</span>
+                        <span className="meta-val">
+                          {pkg.hasAutoOverage
+                            ? `$${pkg.overageBlockCents / 100} / ${pkg.overageBlockMinutes.toLocaleString()}m`
+                            : 'Disabled'}
+                        </span>
+                      </div>
+                      <div className="meta-cell">
+                        <span className="meta-lbl">Recording</span>
+                        <span className="meta-val">{pkg.hasRecording ? 'Enabled' : 'Basic'}</span>
+                      </div>
+                      <div className="meta-cell">
+                        <span className="meta-lbl">Agora Chat</span>
+                        <span className="meta-val">Enabled</span>
                       </div>
                     </div>
 
@@ -749,15 +868,17 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                         onClick={() => openEditPackage(pkg)}
                       >
                         <Edit size={15} />
-                        <span>Edit Pricing &amp; Minutes</span>
+                        <span>{isSuperAdmin ? 'Edit Pricing & Limits' : 'View Plan Details'}</span>
                       </button>
-                      <button
-                        type="button"
-                        className={`pkg-action-toggle ${pkg.isActive ? 'btn-disable' : 'btn-enable'}`}
-                        onClick={() => handleTogglePackageActive(pkg)}
-                      >
-                        {pkg.isActive ? 'Deactivate' : 'Activate'}
-                      </button>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          className={`pkg-action-toggle ${pkg.isActive ? 'btn-disable' : 'btn-enable'}`}
+                          onClick={() => handleTogglePackageActive(pkg)}
+                        >
+                          {pkg.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -814,119 +935,188 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
         )}
 
         {/* ── USER GOVERNANCE TAB ── */}
-        {activeTab === 'users' && (
-          <div className="users-section animate-fade-in">
-            <div className="filter-toolbar glass-card">
-              <div className="search-wrap">
-                <Search size={18} className="search-icon" />
-                <input
-                  type="text"
-                  placeholder="Search by email, name, company..."
-                  value={userSearchQuery}
-                  onChange={(e) => setUserSearchQuery(e.target.value)}
-                />
+        {activeTab === 'users' && (() => {
+          const activeHostCount = users.filter((u) => u.role === 'host').length;
+          return (
+            <div className="users-section animate-fade-in">
+              {/* Host Accounts Allocation Banner */}
+              <div className="users-top-bar glass-card" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '1rem 1.25rem',
+                marginBottom: '1rem',
+                borderRadius: '16px',
+                flexWrap: 'wrap',
+                gap: '1rem',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <Users size={22} className="text-primary" />
+                  <div>
+                    <strong style={{ fontSize: '1rem' }}>Host Accounts Governance (MVP Mode)</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
+                      <span className={`pill-active ${activeHostCount >= 3 ? 'inactive' : 'active'}`}>
+                        {activeHostCount} / 3 Active Hosts
+                      </span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Strict MVP Policy: Maximum 3 host accounts allowed. All public signups are Attendees.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="create-pkg-btn"
+                  onClick={() => setIsCreateHostModalOpen(true)}
+                  disabled={activeHostCount >= 3}
+                  title={activeHostCount >= 3 ? 'Host quota full (max 3 allowed)' : 'Create a new designated host account'}
+                >
+                  <UserPlus size={16} />
+                  <span>Create Host Account ({activeHostCount}/3)</span>
+                </button>
               </div>
 
-              <div className="select-filters">
-                <select
-                  value={userRoleFilter}
-                  onChange={(e) => setUserRoleFilter(e.target.value)}
-                  className="admin-select"
-                >
-                  <option value="all">All Roles</option>
-                  <option value="user">Attendee</option>
-                  <option value="host">Host / Facilitator</option>
-                  <option value="moderator">Moderator</option>
-                  <option value="admin">Admin</option>
-                  <option value="super_admin">Super Admin</option>
-                </select>
+              <div className="filter-toolbar glass-card">
+                <div className="search-wrap">
+                  <Search size={18} className="search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Search by email, name, company..."
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                  />
+                </div>
 
-                <select
-                  value={userStatusFilter}
-                  onChange={(e) => setUserStatusFilter(e.target.value)}
-                  className="admin-select"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="active">Active</option>
-                  <option value="suspended">Suspended</option>
-                  <option value="pending">Pending</option>
-                </select>
+                <div className="select-filters">
+                  <select
+                    value={userRoleFilter}
+                    onChange={(e) => setUserRoleFilter(e.target.value)}
+                    className="admin-select"
+                  >
+                    <option value="all">All Roles</option>
+                    <option value="user">Attendee</option>
+                    <option value="host">Host / Facilitator</option>
+                    <option value="moderator">Moderator</option>
+                    <option value="admin">Admin</option>
+                    <option value="super_admin">Super Admin</option>
+                  </select>
+
+                  <select
+                    value={userStatusFilter}
+                    onChange={(e) => setUserStatusFilter(e.target.value)}
+                    className="admin-select"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="active">Active</option>
+                    <option value="suspended">Suspended</option>
+                    <option value="pending">Pending</option>
+                  </select>
+                </div>
               </div>
-            </div>
 
-            <div className="table-card glass-card">
-              <div className="table-responsive">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Current Role</th>
-                      <th>Host Tier &amp; Mins</th>
-                      <th>Account Status</th>
-                      <th>Activity</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u) => (
-                      <tr key={u.id}>
-                        <td>
-                          <div className="user-cell">
-                            <strong>{u.name || u.email.split('@')[0]}</strong>
-                            <span className="user-email-sub">{u.email}</span>
-                            {u.companyName && <span className="user-co-sub">{u.companyName}</span>}
-                          </div>
-                        </td>
-                        <td>
-                          <select
-                            value={u.role}
-                            onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole, u.email)}
-                            disabled={updatingUserId === u.id}
-                            className={`role-badge-select role-${u.role}`}
-                          >
-                            <option value="user">ATTENDEE</option>
-                            <option value="host">HOST</option>
-                            <option value="moderator">MODERATOR</option>
-                            <option value="admin">ADMIN</option>
-                            <option value="super_admin">SUPER ADMIN</option>
-                          </select>
-                        </td>
-                        <td>
-                          <div className="pkg-info-cell">
-                            <span className="pkg-name-tag">
-                              {u.billingPackage?.name || (u.role === 'host' ? 'Free Host' : 'No Package')}
-                            </span>
-                            <span className="pkg-mins-sub">
-                              {((u.packageMinutesTotal || 0) - (u.packageMinutesUsed || 0)).toLocaleString()} mins remaining
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <span className={`status-pill ${u.status}`}>{u.status}</span>
-                        </td>
-                        <td>
-                          <div className="activity-cell">
-                            <span>{u._count.eventsHosted} events</span>
-                            <span>{u._count.tickets} tickets</span>
-                          </div>
-                        </td>
-                        <td>
-                          <button
-                            className={`status-toggle-btn ${u.status === 'active' ? 'btn-suspend' : 'btn-activate'}`}
-                            onClick={() => handleStatusToggle(u.id, u.status, u.email)}
-                            disabled={updatingUserId === u.id}
-                          >
-                            {u.status === 'active' ? 'Suspend' : 'Activate'}
-                          </button>
-                        </td>
+              <div className="table-card glass-card">
+                <div className="table-responsive">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Current Role</th>
+                        <th>Host Tier &amp; Mins</th>
+                        <th>Account Status</th>
+                        <th>Activity</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {users.map((u) => (
+                        <tr key={u.id}>
+                          <td>
+                            <div className="user-cell">
+                              <strong>{u.name || u.email.split('@')[0]}</strong>
+                              <span className="user-email-sub">{u.email}</span>
+                              {u.companyName && <span className="user-co-sub">{u.companyName}</span>}
+                            </div>
+                          </td>
+                          <td>
+                            <select
+                              value={u.role}
+                              onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole, u.email)}
+                              disabled={updatingUserId === u.id}
+                              className={`role-badge-select role-${u.role}`}
+                            >
+                              <option value="user">ATTENDEE</option>
+                              <option value="host" disabled={u.role !== 'host' && activeHostCount >= 3}>
+                                HOST {u.role !== 'host' && activeHostCount >= 3 ? '(Limit 3 Full)' : ''}
+                              </option>
+                              <option value="moderator">MODERATOR</option>
+                              <option value="admin">ADMIN</option>
+                              <option value="super_admin">SUPER ADMIN</option>
+                            </select>
+                          </td>
+                          <td>
+                            <div className="pkg-info-cell">
+                              <span className="pkg-name-tag">
+                                {u.billingPackage?.name || (u.role === 'host' ? 'MVP Host' : 'No Package')}
+                              </span>
+                              <span className="pkg-mins-sub">
+                                {((u.packageMinutesTotal || 0) - (u.packageMinutesUsed || 0)).toLocaleString()} mins remaining
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`status-pill ${u.status}`}>{u.status}</span>
+                          </td>
+                          <td>
+                            <div className="activity-cell">
+                              <span>{u._count.eventsHosted} events</span>
+                              <span>{u._count.tickets} tickets</span>
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <button
+                                className={`status-toggle-btn ${u.status === 'active' ? 'btn-suspend' : 'btn-activate'}`}
+                                onClick={() => handleStatusToggle(u.id, u.status, u.email)}
+                                disabled={updatingUserId === u.id}
+                              >
+                                {u.status === 'active' ? 'Suspend' : 'Activate'}
+                              </button>
+
+                              <button
+                                type="button"
+                                className="delete-user-btn"
+                                onClick={() => setDeleteTargetUser(u)}
+                                disabled={updatingUserId === u.id || u.role === 'super_admin'}
+                                title={u.role === 'super_admin' ? 'Super Admin accounts cannot be deleted' : 'Permanently delete user'}
+                                style={{
+                                  padding: '0.45rem 0.65rem',
+                                  background: 'rgba(239, 68, 68, 0.12)',
+                                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                                  borderRadius: '8px',
+                                  color: '#f87171',
+                                  cursor: u.role === 'super_admin' ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  fontSize: '0.78rem',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                <Trash2 size={13} />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── EVENTS TAB ── */}
         {activeTab === 'events' && (
@@ -1168,6 +1358,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="49"
                     value={pkgPriceUsd}
                     onChange={(e) => setPkgPriceUsd(e.target.value)}
+                    disabled={!isSuperAdmin}
                     required
                   />
                 </div>
@@ -1181,6 +1372,22 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="50000"
                     value={pkgMinutes}
                     onChange={(e) => setPkgMinutes(e.target.value)}
+                    disabled={!isSuperAdmin}
+                    required
+                  />
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>Max Participants / Session *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10000"
+                    step="1"
+                    placeholder="10"
+                    value={pkgMaxParticipants}
+                    onChange={(e) => setPkgMaxParticipants(e.target.value)}
+                    disabled={!isSuperAdmin}
                     required
                   />
                 </div>
@@ -1194,6 +1401,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="$0.98/1k"
                     value={pkgEffectiveRate}
                     onChange={(e) => setPkgEffectiveRate(e.target.value)}
+                    disabled={!isSuperAdmin}
                   />
                 </div>
 
@@ -1204,6 +1412,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="~20 events of 50 attendees/hr"
                     value={pkgRoughlyCovers}
                     onChange={(e) => setPkgRoughlyCovers(e.target.value)}
+                    disabled={!isSuperAdmin}
                   />
                 </div>
               </div>
@@ -1218,6 +1427,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="10"
                     value={pkgOverageBlockUsd}
                     onChange={(e) => setPkgOverageBlockUsd(e.target.value)}
+                    disabled={!isSuperAdmin}
                   />
                 </div>
 
@@ -1230,6 +1440,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     placeholder="10000"
                     value={pkgOverageBlockMins}
                     onChange={(e) => setPkgOverageBlockMins(e.target.value)}
+                    disabled={!isSuperAdmin}
                   />
                 </div>
               </div>
@@ -1241,6 +1452,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                   placeholder="Describe package benefits, ideal user volume, and support level..."
                   value={pkgDescription}
                   onChange={(e) => setPkgDescription(e.target.value)}
+                  disabled={!isSuperAdmin}
                 />
               </div>
 
@@ -1250,6 +1462,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     type="checkbox"
                     checked={pkgIsActive}
                     onChange={(e) => setPkgIsActive(e.target.checked)}
+                    disabled={!isSuperAdmin}
                   />
                   <span>Active &amp; Visible on Public Marketplace</span>
                 </label>
@@ -1259,8 +1472,29 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     type="checkbox"
                     checked={pkgIsCustom}
                     onChange={(e) => setPkgIsCustom(e.target.checked)}
+                    disabled={!isSuperAdmin}
                   />
                   <span>Custom / Enterprise Tier (Contact Sales)</span>
+                </label>
+
+                <label className="toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={pkgHasRecording}
+                    onChange={(e) => setPkgHasRecording(e.target.checked)}
+                    disabled={!isSuperAdmin}
+                  />
+                  <span>Full Cloud Recording</span>
+                </label>
+
+                <label className="toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={pkgHasAutoOverage}
+                    onChange={(e) => setPkgHasAutoOverage(e.target.checked)}
+                    disabled={!isSuperAdmin}
+                  />
+                  <span>Auto-Overage Protection ($10 per block)</span>
                 </label>
               </div>
 
@@ -1273,17 +1507,181 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                     setIsCreatingPackage(false);
                   }}
                 >
+                  {isSuperAdmin ? 'Cancel' : 'Close'}
+                </button>
+                {isSuperAdmin ? (
+                  <button
+                    type="submit"
+                    className="primary-btn"
+                    disabled={isSavingPkg}
+                  >
+                    {isSavingPkg ? 'Saving...' : editingPackage ? 'Save Package Changes' : 'Create Package'}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
+                    Read-only view (Super Admin permission required to edit)
+                  </span>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Host Account Modal (MVP 3-Host Limit) ── */}
+      {isCreateHostModalOpen && (
+        <div className="admin-modal-backdrop animate-fade-in" onClick={() => setIsCreateHostModalOpen(false)}>
+          <div className="admin-modal-card glass-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="admin-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <UserPlus size={22} className="text-primary" />
+                <h3>Provision New Host Account</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setIsCreateHostModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{
+              margin: '0.75rem 0 1.25rem',
+              padding: '0.75rem 1rem',
+              borderRadius: '10px',
+              background: 'rgba(99, 102, 241, 0.1)',
+              border: '1px solid rgba(99, 102, 241, 0.25)',
+              fontSize: '0.82rem',
+              color: '#c7d2fe',
+              lineHeight: 1.4,
+            }}>
+              Host accounts are granted exclusive event-hosting privileges and 100,000 participant-minutes for testing. Maximum 3 host accounts allowed in MVP mode.
+            </div>
+
+            <form onSubmit={handleCreateHostSubmit} className="admin-modal-form">
+              <div className="form-group">
+                <label>Email Address *</label>
+                <input
+                  type="email"
+                  placeholder="host@example.com"
+                  value={newHostEmail}
+                  onChange={(e) => setNewHostEmail(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Password * (min 8 characters)</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={newHostPassword}
+                  onChange={(e) => setNewHostPassword(e.target.value)}
+                  required
+                  minLength={8}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Full Name / Stage Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dr. Jane Doe"
+                  value={newHostName}
+                  onChange={(e) => setNewHostName(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Company / Organization</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Masterclass Series"
+                  value={newHostCompany}
+                  onChange={(e) => setNewHostCompany(e.target.value)}
+                />
+              </div>
+
+              <div className="modal-actions-row" style={{ marginTop: '1.5rem' }}>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => setIsCreateHostModalOpen(false)}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="primary-btn"
-                  disabled={isSavingPkg}
+                  disabled={isCreatingHost}
                 >
-                  {isSavingPkg ? 'Saving...' : editingPackage ? 'Save Package Changes' : 'Create Package'}
+                  {isCreatingHost ? 'Provisioning...' : 'Create Host Account'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete User Confirmation Modal ── */}
+      {deleteTargetUser && (
+        <div className="admin-modal-backdrop animate-fade-in" onClick={() => !isDeletingUser && setDeleteTargetUser(null)}>
+          <div className="admin-modal-card glass-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '460px', borderColor: 'rgba(239, 68, 68, 0.4)' }}>
+            <div className="admin-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <AlertTriangle size={22} className="text-rose" />
+                <h3 style={{ color: '#f87171' }}>Permanently Delete User</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => !isDeletingUser && setDeleteTargetUser(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ margin: '1rem 0', fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              Are you sure you want to permanently delete user account <strong style={{ color: 'white' }}>{deleteTargetUser.email}</strong>?
+            </div>
+
+            <div style={{
+              padding: '0.85rem 1rem',
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: '10px',
+              fontSize: '0.82rem',
+              color: '#fca5a5',
+              marginBottom: '1.5rem',
+              lineHeight: 1.4,
+            }}>
+              <strong>Warning:</strong> This will irrevocably delete all of this user's hosted events, tickets, live sessions, usage logs, and account records. This action cannot be undone.
+            </div>
+
+            <div className="modal-actions-row">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setDeleteTargetUser(null)}
+                disabled={isDeletingUser}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleDeleteUser}
+                disabled={isDeletingUser}
+                style={{
+                  background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                  borderColor: '#ef4444',
+                  boxShadow: '0 4px 14px rgba(239, 68, 68, 0.4)',
+                }}
+              >
+                {isDeletingUser ? 'Deleting Records...' : 'Permanently Delete User'}
+              </button>
+            </div>
           </div>
         </div>
       )}

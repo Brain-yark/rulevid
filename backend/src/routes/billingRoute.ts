@@ -13,6 +13,7 @@ import {
   savePaymentMethodSchema,
 } from '@shared/schemas';
 import { logger } from '../logger';
+import { IS_MVP_MODE } from '../config/mvpConfig';
 
 const router = Router();
 
@@ -204,6 +205,13 @@ router.get('/packages/status', (async (req: Request, res: Response) => {
 // POST /api/v1/billing/packages/subscribe - Select tier from marketplace
 router.post('/packages/subscribe', validateRequest(subscribePackageSchema), (async (req: Request, res: Response) => {
   try {
+    if (IS_MVP_MODE) {
+      return res.status(400).json({
+        error: 'Billing packages coming soon',
+        message: 'Billing packages and paid tiers are disabled for MVP testing (Coming Soon). Host accounts and limits are managed directly by the platform administrator.',
+      });
+    }
+
     const userId = (req as any).user.userId;
     const { packageSlug } = req.body;
 

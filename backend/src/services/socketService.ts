@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io';
+import { prisma } from '../db';
 import { logger } from '../logger';
 
 export interface SessionParticipant {
@@ -72,6 +73,7 @@ export class SocketService {
 
         this.broadcastParticipantCount(sessionId);
         this.broadcastParticipants(sessionId);
+        this.syncSessionParticipantCount(sessionId, this.getAudienceCount(sessionId));
       });
 
       // Leave session
@@ -230,6 +232,37 @@ export class SocketService {
    */
   public emitToSession(sessionId: string, event: string, data: any) {
     this.io.to(sessionId).emit(event, data);
+  }
+
+  /**
+   * Broadcast stream_ended to all participants in a session so their browsers
+   * cleanly unmount Agora tracks, stop sending/receiving RTC packets, and leave the room.
+   */
+  public broadcastStreamEnded(sessionId: string, message: string = 'This live session has concluded.') {
+    this.io.to(sessionId).emit('stream_ended', { sessionId, message });
+    this.io.to(sessionId).emit('billing:stream_ending', { sessionId, message });
+    logger.info({ sessionId }, '[SocketService] Broadcasted stream_ended to session participants');
+  }
+
+  /**
+   * Persists peak audience size to the database for reliable billing & analytics.
+   */
+  public async syncSessionParticipantCount(sessionId: string, count: number) {
+    if (!sessionId || count <= 0) return;
+    try {
+      const session = await prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { participantCount: true },
+      });
+      if (session && count > session.participantCount) {
+        await prisma.session.update({
+          where: { id: sessionId },
+          data: { participantCount: count },
+        });
+      }
+    } catch (e: any) {
+      // Non-fatal
+    }
   }
 }
 
