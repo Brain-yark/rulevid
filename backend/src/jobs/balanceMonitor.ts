@@ -107,16 +107,13 @@ class BalanceMonitorJob {
         }
 
         const isDepleted = remaining <= 0;
-        const isLowBalance = !isDepleted && percentRemaining <= 20;
+        const isLowBalance = !isDepleted && (percentRemaining <= 20 || remaining <= 30);
+        const isCritical = !isDepleted && remaining <= 10;
         const estimatedMinutesLeft = Math.floor(remaining / activeAudienceCount);
 
-        // ── PATH A: Balance Hits Zero ──────────────────────────────────────────
+        // ── PATH A: Balance Hits Zero → 2-min Grace then Hard End ─────────────
         if (isDepleted) {
-          // In MVP mode: do not cut off active streams!
-          if (IS_MVP_MODE) {
-            continue;
-          }
-
+          // MVP mode: No auto-overage. Always enter grace period then end.
           const hasCard = Boolean(host.stripePaymentMethodId && host.stripeCustomerId);
           const hasConsent = host.overageConsent;
 
@@ -148,7 +145,7 @@ class BalanceMonitorJob {
             }
           }
 
-          // No card on file OR no overage consent OR charge failed -> Enter 2-minute Grace Period
+          // No card/consent/charge failed → Enter 2-minute Grace Period then end session
           let grace = this.activeGracePeriods.get(sessionId);
           if (!grace) {
             grace = {
@@ -158,39 +155,38 @@ class BalanceMonitorJob {
               expiresAt: now + 120 * 1000, // 2 minutes grace period
             };
             this.activeGracePeriods.set(sessionId, grace);
-            logger.warn(`[BalanceMonitor] Session ${sessionId} entered 2-minute grace period (No card/consent).`);
+            logger.warn(`[BalanceMonitor] Session ${sessionId} entered 2-minute grace period. Minutes depleted.`);
           }
 
           const secondsRemaining = Math.max(0, Math.ceil((grace.expiresAt - now) / 1000));
 
           if (secondsRemaining > 0) {
-            const hasCard = Boolean(host.stripePaymentMethodId);
             socketService?.emitToHost(hostId, 'billing:grace_period', {
               sessionId,
               secondsRemaining,
-              message: `Participant-minute balance is zero! 2-minute grace period active. Stream will end in ${secondsRemaining}s unless you top up now.`,
-              canOneClickTopup: hasCard,
+              message: `⚠️ Participant-minute balance is ZERO! Session will end automatically in ${secondsRemaining}s. No top-up available in MVP mode.`,
+              canOneClickTopup: false,
             });
 
             socketService?.emitToSession(sessionId, 'billing:grace_period', {
               sessionId,
               secondsRemaining,
-              message: `Stream is in a grace period (${secondsRemaining}s remaining).`,
+              message: `Stream is ending in ${secondsRemaining}s — minute balance depleted.`,
             });
           } else {
-            // Grace period expired -> Soft Cutoff (End session gracefully)
-            logger.warn(`[BalanceMonitor] Grace period expired for session ${sessionId}. Performing soft cutoff.`);
+            // Grace period expired → Hard end session
+            logger.warn(`[BalanceMonitor] Grace period expired for session ${sessionId}. Ending session automatically.`);
 
             socketService?.emitToSession(sessionId, 'billing:stream_ending', {
               sessionId,
-              reason: 'grace_expired',
-              message: 'This live session has concluded because the host participant-minute package was depleted.',
+              reason: 'minutes_depleted',
+              message: 'This live session has ended. The host\'s allocated participant-minutes have been fully used.',
             });
 
             socketService?.emitToHost(hostId, 'billing:stream_ending', {
               sessionId,
-              reason: 'depleted_balance_no_consent',
-              message: 'Your stream was gracefully concluded due to depleted balance. Top up or enable auto-overage to prevent cutoffs.',
+              reason: 'minutes_depleted',
+              message: 'Your session has been automatically ended. Your allocated 2,710 participant-minutes are exhausted. Contact the Super Admin to request a new allocation.',
             });
 
             await this.endSessionGracefully(session);
@@ -200,12 +196,14 @@ class BalanceMonitorJob {
           continue;
         }
 
-        // ── PATH B: Balance is Low (<= 20% remaining) ─────────────────────────
-        if (isLowBalance) {
-          // Clear any stale grace period if host topped up
+        // ── PATH B: Balance Low (≤20% or ≤30 mins) or Critical (≤10 mins) ──────
+        if (isLowBalance || isCritical) {
           this.activeGracePeriods.delete(sessionId);
 
-          const hasCard = Boolean(host.stripePaymentMethodId && host.stripeCustomerId);
+          const urgency = isCritical ? 'CRITICAL' : 'LOW';
+          const warningMsg = isCritical
+            ? `🚨 CRITICAL: Only ${remaining} participant-minute${remaining === 1 ? '' : 's'} left! Session will end automatically when minutes run out.`
+            : `⚠️ Low balance — ${remaining.toLocaleString()} participant-minutes remaining (~${estimatedMinutesLeft} min at current ${activeAudienceCount} attendees). Session ends automatically when depleted.`;
 
           socketService?.emitToHost(hostId, 'billing:low_balance', {
             sessionId,
@@ -214,12 +212,13 @@ class BalanceMonitorJob {
             minutesRemaining: remaining,
             percentRemaining,
             estimatedMinutesLeft,
-            message: `Low on minutes — ${remaining.toLocaleString()} remaining, ~${estimatedMinutesLeft} minutes left at current audience size (${activeAudienceCount} attendees)`,
-            canOneClickTopup: hasCard,
-            overageConsent: host.overageConsent,
+            urgency,
+            message: warningMsg,
+            canOneClickTopup: false,  // MVP: no top-up
+            overageConsent: false,
           });
         } else {
-          // Balance is healthy (> 20%) — clear any stale grace period
+          // Balance is healthy — clear any stale grace period
           this.activeGracePeriods.delete(sessionId);
         }
       }
@@ -227,6 +226,7 @@ class BalanceMonitorJob {
       logger.error({ err }, '[BalanceMonitor] Error in checkActiveSessions');
     }
   }
+
 
   /**
    * Gracefully ends a live session when grace period expires.

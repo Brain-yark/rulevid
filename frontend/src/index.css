@@ -28,9 +28,7 @@
 
 body {
   font-family: var(--font-primary);
-  background: linear-gradient(rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.94)),
-              url('/backgrnd.jpeg') no-repeat center center fixed;
-  background-size: cover;
+  background-color: var(--bg-dark);
   color: var(--text-main);
   min-height: 100vh;
   overflow-x: hidden;

@@ -220,6 +220,11 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
   const [pkgIsCustom, setPkgIsCustom] = useState(false);
   const [isSavingPkg, setIsSavingPkg] = useState(false);
 
+  // Edit Minutes Modal State (for host accounts)
+  const [editMinutesUser, setEditMinutesUser] = useState<AdminUser | null>(null);
+  const [editMinutesValue, setEditMinutesValue] = useState('2710');
+  const [isSavingMinutes, setIsSavingMinutes] = useState(false);
+
   const currentUser = (() => {
     try {
       return JSON.parse(localStorage.getItem('user') || '{}');
@@ -228,6 +233,29 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
     }
   })();
   const isSuperAdmin = currentUser?.role === 'super_admin';
+
+  const handleUpdateHostMinutes = async () => {
+    if (!editMinutesUser) return;
+    const mins = parseInt(editMinutesValue, 10);
+    if (isNaN(mins) || mins < 0) { toast.error('Invalid', 'Please enter a valid minute count (0 or more).'); return; }
+    setIsSavingMinutes(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`${API_BASE}/api/v1/admin/users/${editMinutesUser.id}/billing`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ packageMinutesTotal: mins }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast.success('Updated', `Host ${editMinutesUser.email} now has ${mins.toLocaleString()} allocated minutes.`);
+      setEditMinutesUser(null);
+      setUsers(prev => prev.map(u => u.id === editMinutesUser.id ? { ...u, packageMinutesTotal: mins } : u));
+    } catch (err: any) {
+      toast.error('Error', err.message);
+    } finally {
+      setIsSavingMinutes(false);
+    }
+  };
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('auth_token');
@@ -1074,7 +1102,7 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                             </div>
                           </td>
                           <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                               <button
                                 className={`status-toggle-btn ${u.status === 'active' ? 'btn-suspend' : 'btn-activate'}`}
                                 onClick={() => handleStatusToggle(u.id, u.status, u.email)}
@@ -1082,6 +1110,30 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
                               >
                                 {u.status === 'active' ? 'Suspend' : 'Activate'}
                               </button>
+
+                              {u.role === 'host' && (
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditMinutesUser(u); setEditMinutesValue(String(u.packageMinutesTotal || 2710)); }}
+                                  style={{
+                                    padding: '0.45rem 0.65rem',
+                                    background: 'rgba(99, 102, 241, 0.15)',
+                                    border: '1px solid rgba(99, 102, 241, 0.4)',
+                                    borderRadius: '8px',
+                                    color: '#a5b4fc',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 600,
+                                  }}
+                                  title="Edit allocated minutes for this host"
+                                >
+                                  <Edit size={13} />
+                                  <span>Minutes</span>
+                                </button>
+                              )}
 
                               <button
                                 type="button"
@@ -1302,6 +1354,77 @@ const SuperAdminPage: React.FC<SuperAdminPageProps> = ({ onJoinRoom }) => {
           </div>
         )}
       </div>
+
+      {/* ── Edit Host Minutes Modal ── */}
+      {editMinutesUser && (
+        <div className="modal-backdrop" onClick={() => setEditMinutesUser(null)}>
+          <div className="modal-content glass-card animate-fade-in" style={{ maxWidth: '440px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <Edit size={20} className="text-primary" style={{ color: '#a5b4fc' }} />
+                <h3>Edit Host Minutes</h3>
+              </div>
+              <button className="close-btn" onClick={() => setEditMinutesUser(null)}><X size={18} /></button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              <p style={{ marginBottom: '0.5rem', color: '#94a3b8', fontSize: '0.87rem' }}>
+                Adjusting allocated minutes for:
+              </p>
+              <p style={{ marginBottom: '0.25rem', fontWeight: 700, color: '#e2e8f0' }}>{editMinutesUser.name || editMinutesUser.email}</p>
+              <p style={{ marginBottom: '1.25rem', fontSize: '0.8rem', color: '#64748b' }}>
+                Currently used: <strong style={{ color: '#fbbf24' }}>{(editMinutesUser.packageMinutesUsed || 0).toLocaleString()}</strong> /{' '}
+                <strong style={{ color: '#a5b4fc' }}>{(editMinutesUser.packageMinutesTotal || 0).toLocaleString()}</strong> mins
+              </p>
+
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: '#cbd5e1' }}>
+                  New Total Allocated Minutes
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={editMinutesValue}
+                  onChange={e => setEditMinutesValue(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.9rem',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(99, 102, 241, 0.4)',
+                    borderRadius: '8px',
+                    color: '#f1f5f9',
+                    fontSize: '1rem',
+                    fontWeight: 700,
+                  }}
+                  autoFocus
+                />
+                <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#475569' }}>
+                  Default MVP allocation is 2,710 minutes. When this reaches zero, any active event is automatically ended.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditMinutesUser(null)}
+                  style={{ padding: '0.6rem 1.2rem', background: 'rgba(100,116,139,0.2)', border: '1px solid rgba(100,116,139,0.3)', borderRadius: '8px', color: '#94a3b8', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpdateHostMinutes}
+                  disabled={isSavingMinutes}
+                  style={{ padding: '0.6rem 1.4rem', background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', fontWeight: 700, opacity: isSavingMinutes ? 0.7 : 1 }}
+                >
+                  {isSavingMinutes ? 'Saving…' : 'Update Minutes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Package Edit / Create Modal ── */}
       {(editingPackage || isCreatingPackage) && (

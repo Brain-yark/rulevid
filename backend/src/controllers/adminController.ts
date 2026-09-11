@@ -223,9 +223,9 @@ export const updateUserRole = async (req: Request, res: Response) => {
       ...(walletId ? { walletId } : {}),
     };
 
-    // Auto-allocate test minutes if promoted to host
-    if (role === 'host' && (targetUser.packageMinutesTotal || 0) < 10000) {
-      updateData.packageMinutesTotal = 100000;
+    // Auto-allocate minutes when promoted to host (2710 minutes = MVP allocation)
+    if (role === 'host' && targetUser.role !== 'host') {
+      updateData.packageMinutesTotal = 2710;
       updateData.packageMinutesUsed = 0;
     }
 
@@ -295,7 +295,7 @@ export const createHostUser = async (req: Request, res: Response) => {
         role: 'host',
         status: 'active',
         emailVerified: true,
-        packageMinutesTotal: 100000,
+        packageMinutesTotal: 2710,  // MVP allocation: 2710 minutes per host
         packageMinutesUsed: 0,
       },
       select: {
