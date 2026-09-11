@@ -488,9 +488,11 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       <style>{`
         .landing-wrapper {
           min-height: 100vh;
-          background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.15), transparent),
-                      radial-gradient(circle at bottom left, rgba(244, 63, 94, 0.08), transparent),
-                      #0f111a;
+          background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.20), transparent),
+                      radial-gradient(circle at bottom left, rgba(244, 63, 94, 0.12), transparent),
+                      linear-gradient(rgba(15, 17, 26, 0.84), rgba(15, 17, 26, 0.90)),
+                      url('/backgrnd.jpeg') no-repeat center center fixed;
+          background-size: cover;
           color: white;
           font-family: inherit;
         }
