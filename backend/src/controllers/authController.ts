@@ -32,8 +32,6 @@ export const register = async (req: Request, res: Response) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     const user = await prisma.user.create({
       data: {
@@ -43,19 +41,14 @@ export const register = async (req: Request, res: Response) => {
         role: 'user',
         companyName: companyName?.trim() || null,
         status: 'active',
-        emailVerified: false,
-        verificationToken,
-        verificationExpiresAt,
+        emailVerified: true, // Enabled for smooth MVP testing
         lastLoginAt: null,
       },
     });
 
-    // Send verification email via Resend
-    await emailService.sendVerificationEmail(user.email, user.name, verificationToken);
-
     return res.status(201).json({
-      message: 'Account created! Please check your email to confirm your account before logging in.',
-      requiresVerification: true,
+      message: 'Account created successfully! Please sign in with your email and password.',
+      success: true,
       email: user.email,
     });
   } catch (error: any) {
@@ -84,15 +77,6 @@ export const login = async (req: Request, res: Response) => {
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
-    }
-
-    // Require email verification for all non-superadmin users
-    if (user.role !== 'super_admin' && !user.emailVerified) {
-      return res.status(403).json({
-        error: 'Please confirm your email address before signing in. Check your inbox for the confirmation link.',
-        requiresVerification: true,
-        email: user.email,
-      });
     }
 
     const updatedUser = await prisma.user.update({

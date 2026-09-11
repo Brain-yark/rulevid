@@ -147,16 +147,15 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         throw new Error(data.error || 'Authentication failed');
       }
 
-      // Registration response requiring email verification first
-      if (!isLogin && data.requiresVerification) {
-        setVerificationNotice({
-          message: data.message || `Account created! We've sent a confirmation email to ${email.trim()}. Please verify your email before logging in.`,
-          email: data.email || email.trim(),
-        });
+      // After registration, smoothly return user to the sign-in form
+      if (!isLogin) {
         setIsLogin(true);
+        setPassword('');
+        setVerificationSuccess('🎉 Account created successfully! Please enter your password to sign in.');
+        setVerificationNotice(null);
         toast.success(
-          'Verification Required',
-          `Please check your inbox at ${email.trim()} to verify your account.`
+          'Account Created!',
+          'Your account has been created. Please sign in.'
         );
         return;
       }
@@ -167,17 +166,10 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
       const assignedRole = (data.user.role || 'user').toUpperCase();
 
-      if (isLogin) {
-        toast.success(
-          'Welcome Back!',
-          `Signed in successfully as ${data.user.name || data.user.email} (${assignedRole}). Your account is verified.`
-        );
-      } else {
-        toast.success(
-          'Account Created!',
-          `Welcome to Ruleboard! You are registered as ${assignedRole}.`
-        );
-      }
+      toast.success(
+        'Welcome Back!',
+        `Signed in successfully as ${data.user.name || data.user.email} (${assignedRole}).`
+      );
 
       // If a paid host package was selected with Stripe checkout URL, redirect
       if (!isLogin && data.checkoutUrl) {
