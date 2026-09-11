@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "railway": "^3.11.0",
     "tsc-alias": "^1.9.3"
   },
   "dependencies": {
