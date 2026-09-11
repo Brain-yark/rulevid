@@ -6,10 +6,11 @@ import {
   Globe,
   User,
   Sparkles,
-  Key,
   Check,
   Clock,
   CreditCard,
+  Mail,
+  CheckCircle2,
 } from 'lucide-react';
 import { API_BASE } from '../config';
 import { useToast } from '../context/ToastContext';
@@ -29,6 +30,9 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [packages, setPackages] = useState<BillingPackage[]>(FALLBACK_PACKAGES);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [verificationNotice, setVerificationNotice] = useState<{ message: string; email?: string } | null>(null);
+  const [verificationSuccess, setVerificationSuccess] = useState<string | null>(null);
+  const [isResending, setIsResending] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/billing/packages`)
@@ -41,7 +45,64 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       .catch(() => {
         // Fallback to FALLBACK_PACKAGES
       });
+
+    // Check for email verification token in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const verifyToken = urlParams.get('verify') || urlParams.get('token');
+    if (verifyToken) {
+      setIsLoading(true);
+      fetch(`${API_BASE}/api/v1/auth/verify-email?token=${encodeURIComponent(verifyToken)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setVerificationSuccess('🎉 Your email has been confirmed! Please sign in below.');
+            setVerificationNotice(null);
+            setIsLogin(true);
+            if (data.email) setEmail(data.email);
+            toast.success('Email Confirmed!', 'Your Ruleboard account is verified and ready. Please sign in.');
+          } else {
+            setError(data.error || 'Verification link is invalid or expired.');
+            if (data.email) {
+              setVerificationNotice({ message: data.error, email: data.email });
+            }
+            toast.error('Verification Failed', data.error || 'Invalid verification link');
+          }
+        })
+        .catch(() => {
+          setError('Network error verifying email.');
+        })
+        .finally(() => {
+          setIsLoading(false);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        });
+    }
   }, []);
+
+  const handleResendVerification = async (targetEmail: string) => {
+    if (!targetEmail) {
+      toast.warning('Email Required', 'Please enter your email to resend the verification link.');
+      return;
+    }
+    setIsResending(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/resend-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: targetEmail.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to resend email');
+      toast.success('Confirmation Sent', data.message || `Verification link sent to ${targetEmail}`);
+      setVerificationNotice({
+        message: `A new verification link has been sent to ${targetEmail}. Please check your inbox and spam folder.`,
+        email: targetEmail,
+      });
+    } catch (err: any) {
+      toast.error('Resend Failed', err.message);
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +138,27 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       const data = await response.json();
 
       if (!response.ok) {
+        if (data.requiresVerification) {
+          setVerificationNotice({
+            message: data.error || 'Please confirm your email address before signing in.',
+            email: data.email || email.trim(),
+          });
+        }
         throw new Error(data.error || 'Authentication failed');
+      }
+
+      // Registration response requiring email verification first
+      if (!isLogin && data.requiresVerification) {
+        setVerificationNotice({
+          message: data.message || `Account created! We've sent a confirmation email to ${email.trim()}. Please verify your email before logging in.`,
+          email: data.email || email.trim(),
+        });
+        setIsLogin(true);
+        toast.success(
+          'Verification Required',
+          `Please check your inbox at ${email.trim()} to verify your account.`
+        );
+        return;
       }
 
       // Store token and user data
@@ -89,12 +170,12 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       if (isLogin) {
         toast.success(
           'Welcome Back!',
-          `Signed in successfully as ${data.user.name || data.user.email} (${assignedRole}).`
+          `Signed in successfully as ${data.user.name || data.user.email} (${assignedRole}). Your account is verified.`
         );
       } else {
         toast.success(
           'Account Created!',
-          `Welcome to RuleVid! You are registered as ${assignedRole}.`
+          `Welcome to Ruleboard! You are registered as ${assignedRole}.`
         );
       }
 
@@ -113,13 +194,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const autofillSuperAdmin = () => {
-    setIsLogin(true);
-    setEmail('superadmin@svsm.io');
-    setPassword('SuperAdmin@2026!');
-    toast.info('Super Admin Selected', 'Credentials loaded for superadmin@svsm.io');
   };
 
   const selectPlanAndRegister = (slug: string) => {
@@ -230,6 +304,36 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             </div>
           )}
 
+          {verificationSuccess && (
+            <div className="verification-banner verification-banner-success">
+              <CheckCircle2 size={20} className="banner-icon-success" />
+              <div className="verification-banner-text">
+                <strong>Email Confirmed!</strong>
+                <p>{verificationSuccess}</p>
+              </div>
+            </div>
+          )}
+
+          {verificationNotice && (
+            <div className="verification-banner verification-banner-notice">
+              <div className="verification-banner-inner">
+                <Mail size={20} className="banner-icon-notice" />
+                <div className="verification-banner-text">
+                  <strong>Confirmation Required</strong>
+                  <p>{verificationNotice.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="resend-verification-btn"
+                onClick={() => handleResendVerification(verificationNotice.email || email)}
+                disabled={isResending}
+              >
+                {isResending ? 'Sending...' : 'Resend Verification Email'}
+              </button>
+            </div>
+          )}
+
           {error && <div className="error-message">{error}</div>}
 
           <form onSubmit={handleSubmit}>
@@ -286,21 +390,14 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                 e.preventDefault();
                 setIsLogin(!isLogin);
                 setError('');
+                setVerificationNotice(null);
+                setVerificationSuccess(null);
               }}
             >
               {isLogin
                 ? "Don't have an account? Register now"
                 : 'Already have an account? Sign In'}
             </a>
-
-            <button
-              type="button"
-              className="superadmin-autofill-btn"
-              onClick={autofillSuperAdmin}
-            >
-              <Key size={14} />
-              <span>Use Super Admin Credentials</span>
-            </button>
           </div>
         </div>
       </div>
@@ -850,25 +947,86 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           color: var(--primary);
         }
 
-        .superadmin-autofill-btn {
-          display: inline-flex;
+        /* ── Verification Banners ── */
+        .verification-banner {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+          padding: 1rem;
+          border-radius: 12px;
+          margin-bottom: 1.25rem;
+          font-size: 0.88rem;
+          line-height: 1.45;
+          animation: fadeIn 0.3s ease-in-out;
+        }
+
+        .verification-banner-inner {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.75rem;
+        }
+
+        .verification-banner-success {
+          background: rgba(16, 185, 129, 0.12);
+          border: 1px solid rgba(16, 185, 129, 0.3);
+          color: #d1fae5;
+          display: flex;
+          flex-direction: row;
           align-items: center;
-          gap: 0.45rem;
-          padding: 0.45rem 0.9rem;
-          background: rgba(244, 63, 94, 0.1);
-          border: 1px dashed rgba(244, 63, 94, 0.35);
-          color: #fda4af;
-          border-radius: 20px;
-          font-size: 0.78rem;
+        }
+
+        .banner-icon-success {
+          color: #10b981;
+          flex-shrink: 0;
+        }
+
+        .verification-banner-notice {
+          background: rgba(99, 102, 241, 0.12);
+          border: 1px solid rgba(99, 102, 241, 0.35);
+          color: #e0e7ff;
+        }
+
+        .banner-icon-notice {
+          color: #818cf8;
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+
+        .verification-banner-text strong {
+          display: block;
+          color: #ffffff;
+          font-weight: 600;
+          margin-bottom: 0.2rem;
+        }
+
+        .verification-banner-text p {
+          margin: 0;
+          color: #c7d2fe;
+          font-size: 0.84rem;
+        }
+
+        .resend-verification-btn {
+          align-self: flex-start;
+          padding: 0.4rem 0.85rem;
+          background: rgba(99, 102, 241, 0.25);
+          border: 1px solid rgba(99, 102, 241, 0.5);
+          color: #ffffff;
+          border-radius: 8px;
+          font-size: 0.8rem;
           font-weight: 600;
           cursor: pointer;
           transition: all 0.2s ease;
+          margin-left: 2.2rem;
         }
 
-        .superadmin-autofill-btn:hover {
-          background: rgba(244, 63, 94, 0.2);
-          border-color: #f43f5e;
-          color: white;
+        .resend-verification-btn:hover:not(:disabled) {
+          background: rgba(99, 102, 241, 0.4);
+          border-color: #818cf8;
+        }
+
+        .resend-verification-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         /* ── Pricing Section on Landing Page ── */

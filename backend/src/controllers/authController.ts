@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { prisma } from '../db';
 import { billingService } from '../services/billingService';
 import { packageService } from '../services/packageService';
 import { stripeService } from '../services/stripeService';
+import { emailService } from '../services/emailService';
 import { AuthResponse, UserRole, User } from '@shared/types';
 import { logger } from '../logger';
 
@@ -12,7 +14,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
 export const register = async (req: Request, res: Response) => {
   try {
-    const { email, password, name, companyName, role = 'user', packageSlug } = req.body;
+    const { email, password, name, companyName, role = 'user' } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -24,14 +26,15 @@ export const register = async (req: Request, res: Response) => {
 
     // Strict MVP Policy: Public self-registration is strictly for attendees ('user').
     // Host accounts are provisioned exclusively by the Super Admin (max 3 hosts allowed).
-    const assignedRole: UserRole = 'user';
-
     const existingUser = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (existingUser) {
       return res.status(400).json({ error: 'Email is already taken' });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase().trim(),
@@ -41,48 +44,20 @@ export const register = async (req: Request, res: Response) => {
         companyName: companyName?.trim() || null,
         status: 'active',
         emailVerified: false,
-        lastLoginAt: new Date(),
+        verificationToken,
+        verificationExpiresAt,
+        lastLoginAt: null,
       },
     });
 
-    const checkoutUrl: string | undefined = undefined;
+    // Send verification email via Resend
+    await emailService.sendVerificationEmail(user.email, user.name, verificationToken);
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    const freshUser = await prisma.user.findUnique({
-      where: { id: user.id },
-      include: { billingPackage: true },
+    return res.status(201).json({
+      message: 'Account created! Please check your email to confirm your account before logging in.',
+      requiresVerification: true,
+      email: user.email,
     });
-
-    const authResponse: AuthResponse & { checkoutUrl?: string } = {
-      user: {
-        id: freshUser!.id,
-        email: freshUser!.email,
-        name: freshUser!.name || undefined,
-        role: freshUser!.role as UserRole,
-        emailVerified: freshUser!.emailVerified,
-        lastLoginAt: freshUser!.lastLoginAt?.toISOString(),
-        companyName: freshUser!.companyName || undefined,
-        pricingTier: freshUser!.pricingTier,
-        status: freshUser!.status,
-        walletId: freshUser!.walletId ?? undefined,
-        billingPackageId: freshUser!.billingPackageId ?? undefined,
-        billingPackage: freshUser!.billingPackage as any,
-        packageMinutesTotal: freshUser!.packageMinutesTotal,
-        packageMinutesUsed: freshUser!.packageMinutesUsed,
-        packageCycleStartedAt: freshUser!.packageCycleStartedAt?.toISOString(),
-        packageCycleExpiresAt: freshUser!.packageCycleExpiresAt?.toISOString(),
-        overageConsent: freshUser!.overageConsent,
-      },
-      token,
-      ...(checkoutUrl ? { checkoutUrl } : {}),
-    };
-
-    return res.status(201).json(authResponse);
   } catch (error: any) {
     logger.error({ error: error.message }, '[Auth] Register error');
     return res.status(500).json({ error: 'Internal server error' });
@@ -109,6 +84,15 @@ export const login = async (req: Request, res: Response) => {
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Require email verification for all non-superadmin users
+    if (user.role !== 'super_admin' && !user.emailVerified) {
+      return res.status(403).json({
+        error: 'Please confirm your email address before signing in. Check your inbox for the confirmation link.',
+        requiresVerification: true,
+        email: user.email,
+      });
     }
 
     const updatedUser = await prisma.user.update({
@@ -150,6 +134,102 @@ export const login = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[Auth] Login error:', error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const verifyEmail = async (req: Request, res: Response) => {
+  try {
+    const { token } = req.query;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'Verification token is required' });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        verificationToken: token,
+      },
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired verification token' });
+    }
+
+    if (user.verificationExpiresAt && user.verificationExpiresAt < new Date()) {
+      return res.status(400).json({
+        error: 'Verification link has expired. Please request a new verification email.',
+        expired: true,
+        email: user.email,
+      });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerified: true,
+        verificationToken: null,
+        verificationExpiresAt: null,
+      },
+    });
+
+    // Send welcome confirmation email
+    emailService.sendWelcomeEmail(user.email, user.name).catch((err) => {
+      logger.warn({ error: err.message }, '[Auth] Failed sending welcome email after verification');
+    });
+
+    return res.json({
+      message: 'Email verified successfully! You can now log in.',
+      success: true,
+      email: user.email,
+    });
+  } catch (error: any) {
+    logger.error({ error: error.message }, '[Auth] verifyEmail error');
+    return res.status(500).json({ error: 'Failed to verify email' });
+  }
+};
+
+export const resendVerification = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase().trim() },
+    });
+
+    if (!user) {
+      // Don't leak email existence
+      return res.json({
+        message: 'If an account exists with this email, a verification link has been sent.',
+        success: true,
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({ error: 'This email is already verified. You can sign in directly.' });
+    }
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        verificationToken,
+        verificationExpiresAt,
+      },
+    });
+
+    await emailService.sendVerificationEmail(user.email, user.name, verificationToken);
+
+    return res.json({
+      message: 'A fresh verification email has been sent. Please check your inbox.',
+      success: true,
+    });
+  } catch (error: any) {
+    logger.error({ error: error.message }, '[Auth] resendVerification error');
+    return res.status(500).json({ error: 'Failed to resend verification email' });
   }
 };
 

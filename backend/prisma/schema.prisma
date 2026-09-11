@@ -17,6 +17,8 @@ model User {
   websiteUrl       String?
   role             String        @default("user")     // user (attendee), host (facilitator), moderator, admin, super_admin
   emailVerified    Boolean       @default(false)
+  verificationToken     String?       @unique
+  verificationExpiresAt DateTime?
   lastLoginAt      DateTime?
   companyName      String?
   walletId               String?         // Reference to Lago wallet
