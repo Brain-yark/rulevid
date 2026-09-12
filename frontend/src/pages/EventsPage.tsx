@@ -24,6 +24,9 @@ import {
 import type { Event } from '../../../shared/types';
 import { API_BASE } from '../config';
 import { BillingMarketplaceModal } from '../components/BillingMarketplaceModal';
+import { EventShareModal } from '../components/EventShareModal';
+import { copyToClipboard } from '../utils/clipboard';
+import { getGlobalSocket } from '../utils/socket';
 
 interface EventsPageProps {
   onJoinEvent: (eventId: string) => void;
@@ -64,6 +67,8 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [shareModalEvent, setShareModalEvent] = useState<Event | null>(null);
+  const [isShareModalNewlyCreated, setIsShareModalNewlyCreated] = useState(false);
   const { toasts, addToast, removeToast } = useToast();
 
   // Determine current user role
@@ -99,16 +104,12 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
     setIsModalOpen(true);
   };
 
-  useEffect(() => {
-    fetchEvents();
-  }, [search, statusFilter]);
-
-  const fetchEvents = async () => {
+  const fetchEvents = async (silent: boolean = false) => {
     const token = localStorage.getItem('auth_token');
     if (!token) return;
 
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const query = new URLSearchParams();
 
       if (isHost) {
@@ -139,16 +140,46 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
           data = data.filter(ev => ev.status === 'live' || ev.status === 'published');
         }
         setEvents(data);
-      } else {
+      } else if (!silent) {
         addToast('Failed to load events. Please refresh.', 'error');
       }
     } catch (err) {
       console.error('Failed to load events:', err);
-      addToast('Network error loading events.', 'error');
+      if (!silent) {
+        addToast('Network error loading events.', 'error');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchEvents(false);
+  }, [search, statusFilter]);
+
+  // Real-time events lobby subscription: auto-sync live status & new published events
+  useEffect(() => {
+    const socket = getGlobalSocket();
+    socket.emit('join_events_lobby');
+
+    const handleStatusChanged = (data: { eventId: string; status: string; sessionId?: string }) => {
+      console.log('[EventsPage] Real-time event status changed:', data);
+      // Immediately refresh events list silently in the background
+      fetchEvents(true);
+    };
+
+    socket.on('event_status_changed', handleStatusChanged);
+
+    // Fallback sync every 20s to ensure list is always accurate without user reload
+    const pollInterval = setInterval(() => {
+      fetchEvents(true);
+    }, 20000);
+
+    return () => {
+      socket.off('event_status_changed', handleStatusChanged);
+      clearInterval(pollInterval);
+    };
+  }, [isHost, search, statusFilter]);
 
   // Shared create/update logic
   const submitEvent = async (autoPublish: boolean) => {
@@ -212,12 +243,19 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
           addToast('Event created as draft — automatic publish failed. Publish it manually.', 'warning');
         } else {
           addToast('Event created and published successfully! You are now a Host.', 'success');
+          savedEvent.status = 'published';
         }
       } else {
         addToast(editingEventId ? 'Event updated successfully.' : 'Event saved as draft.', 'success');
       }
 
       await fetchEvents();
+
+      // Immediately pop up the functional share modal for the created event
+      if (!editingEventId) {
+        setShareModalEvent(savedEvent);
+        setIsShareModalNewlyCreated(true);
+      }
     } catch (err) {
       console.error('[EventsPage] submitEvent network error:', err);
       addToast('Network error — could not reach the server. Check your connection.', 'error');
@@ -307,12 +345,27 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
     }
   };
 
-  const handleCopyLink = (eventId: string) => {
-    const shareUrl = `${window.location.origin}/?event=${eventId}`;
-    navigator.clipboard.writeText(shareUrl);
-    setCopiedId(eventId);
-    addToast('Event link copied to clipboard!', 'info');
+  const handleCopyLink = async (eventOrId: string | Event) => {
+    let targetEvent: Event | undefined;
+    let targetId: string;
+    if (typeof eventOrId === 'string') {
+      targetId = eventOrId;
+      targetEvent = events.find((e) => e.id === eventOrId);
+    } else {
+      targetEvent = eventOrId;
+      targetId = eventOrId.id;
+    }
+
+    const shareUrl = `${window.location.origin}/?event=${targetId}`;
+    await copyToClipboard(shareUrl);
+    setCopiedId(targetId);
+    addToast('Event share link copied to clipboard!', 'info');
     setTimeout(() => setCopiedId(null), 2500);
+
+    if (targetEvent) {
+      setShareModalEvent(targetEvent);
+      setIsShareModalNewlyCreated(false);
+    }
   };
 
   const resetForm = () => {
@@ -854,6 +907,15 @@ const EventsPage: React.FC<EventsPageProps> = ({ onJoinEvent, onViewEventDetails
         onSuccess={handleBillingSuccess}
         title="Choose a Host Package to Create Events"
         subtitle="Select a participant-minute plan to host and monetize live sessions on RuleVid. Free tier is available!"
+      />
+
+      {/* Share Event Modal */}
+      <EventShareModal
+        isOpen={!!shareModalEvent}
+        event={shareModalEvent}
+        isNewlyCreated={isShareModalNewlyCreated}
+        onClose={() => setShareModalEvent(null)}
+        onPreview={(eventId) => onViewEventDetails(eventId)}
       />
 
       {/* Styled JSX */}

@@ -19,6 +19,8 @@ export class SocketService {
   private io: Server;
   // Map of sessionId -> (Map of socketId -> SessionParticipant)
   private sessionParticipants: Map<string, Map<string, SessionParticipant>> = new Map();
+  // Set of sessionIds currently having active screen share
+  private activeScreenShares: Set<string> = new Set();
 
   constructor(io: Server) {
     this.io = io;
@@ -35,6 +37,24 @@ export class SocketService {
           socket.join(`user:${userId}`);
           socket.join(`host:${userId}`);
           logger.info(`[Socket] Socket ${socket.id} joined rooms user:${userId} and host:${userId}`);
+        }
+      });
+
+      // Join global events lobby to receive real-time event status updates (live/ended/published)
+      socket.on('join_events_lobby', () => {
+        socket.join('events_lobby');
+      });
+
+      // Watch a specific event for real-time status changes (used on EventDetailsPage)
+      socket.on('watch_event', (eventId: string) => {
+        if (eventId) {
+          socket.join(`event:${eventId}`);
+        }
+      });
+
+      socket.on('unwatch_event', (eventId: string) => {
+        if (eventId) {
+          socket.leave(`event:${eventId}`);
         }
       });
 
@@ -74,6 +94,11 @@ export class SocketService {
         this.broadcastParticipantCount(sessionId);
         this.broadcastParticipants(sessionId);
         this.syncSessionParticipantCount(sessionId, this.getAudienceCount(sessionId));
+
+        // If this session currently has an active screen share, notify the newcomer immediately
+        if (this.activeScreenShares.has(sessionId)) {
+          socket.emit('host_screen_share_started');
+        }
       });
 
       // Leave session
@@ -86,11 +111,17 @@ export class SocketService {
 
       // Screen Share: relay host sharing state to all participants
       socket.on('host_screen_share_started', (data: { sessionId: string }) => {
-        this.io.to(data.sessionId).emit('host_screen_share_started');
+        if (data?.sessionId) {
+          this.activeScreenShares.add(data.sessionId);
+          this.io.to(data.sessionId).emit('host_screen_share_started');
+        }
       });
 
       socket.on('host_screen_share_stopped', (data: { sessionId: string }) => {
-        this.io.to(data.sessionId).emit('host_screen_share_stopped');
+        if (data?.sessionId) {
+          this.activeScreenShares.delete(data.sessionId);
+          this.io.to(data.sessionId).emit('host_screen_share_stopped');
+        }
       });
 
       // Hand Raising: Attendee requests to speak
@@ -161,17 +192,23 @@ export class SocketService {
       });
 
       // Real-time Session Chat
-      socket.on('send_message', (data: { sessionId: string; user?: string; senderId?: string; role?: string; text: string }) => {
+      socket.on('send_message', (data: { sessionId: string; user?: string; senderId?: string; role?: string; text: string; localId?: string }) => {
         if (!data || !data.sessionId || !data.text?.trim()) return;
         const participantsMap = this.sessionParticipants.get(data.sessionId);
         const participant = participantsMap?.get(socket.id);
         const senderName = data.user || participant?.name || 'Participant';
+        const msgId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+        // Broadcast to ALL sockets in the room (server-generated id)
+        // The sender's own socket will receive this too, but the client skips it
+        // because isSelf=true messages are now filtered out on the receiving end.
         this.io.to(data.sessionId).emit('message_received', {
-          id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          id: msgId,
+          localId: data.localId, // Echo back so sender can deduplicate if needed
           sessionId: data.sessionId,
           user: senderName,
           senderId: data.senderId || participant?.userId || socket.id,
+          senderSocketId: socket.id, // Include socket id for self-detection
           role: data.role || participant?.role || 'attendee',
           text: data.text.trim(),
           timestamp: new Date().toISOString(),
@@ -259,6 +296,18 @@ export class SocketService {
     this.io.to(sessionId).emit('stream_ended', { sessionId, message });
     this.io.to(sessionId).emit('billing:stream_ending', { sessionId, message });
     logger.info({ sessionId }, '[SocketService] Broadcasted stream_ended to session participants');
+  }
+
+  /**
+   * Broadcast an event status change (e.g. published -> live -> ended) to all connected clients
+   * watching that event, so they can update their UI without a page reload.
+   */
+  public broadcastEventStatusChange(eventId: string, status: string, sessionId?: string) {
+    // Broadcast to the global events room (all logged-in clients watching the events list)
+    this.io.to('events_lobby').emit('event_status_changed', { eventId, status, sessionId });
+    // Also broadcast directly to the event-specific watch room
+    this.io.to(`event:${eventId}`).emit('event_status_changed', { eventId, status, sessionId });
+    logger.info({ eventId, status }, '[SocketService] Broadcasted event_status_changed');
   }
 
   /**

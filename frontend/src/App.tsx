@@ -28,17 +28,63 @@ type Page = 'login' | 'events' | 'event-details' | 'dashboard' | 'super-admin' |
 
 const App: React.FC = () => {
   const toast = useToast();
-  const [currentPage, setCurrentPage] = useState<Page>('login');
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [activeEventId, setActiveEventId] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
 
-  useEffect(() => {
-    // Check if direct event link was visited: e.g. /?event=UUID
+  const [activeEventId, setActiveEventId] = useState<string | null>(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const eventParam = urlParams.get('event');
-    if (eventParam) {
-      setActiveEventId(eventParam);
+    if (eventParam) return eventParam;
+    const pathMatch = window.location.pathname.match(/^\/events?\/([a-zA-Z0-9_-]+)/);
+    if (pathMatch && pathMatch[1] && pathMatch[1] !== 'analytics') return pathMatch[1];
+    return null;
+  });
+
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const saved = localStorage.getItem('user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [currentPage, setCurrentPage] = useState<Page>(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const eventParam = urlParams.get('event');
+    if (eventParam) return 'event-details';
+    const pathMatch = window.location.pathname.match(/^\/events?\/([a-zA-Z0-9_-]+)/);
+    if (pathMatch && pathMatch[1] && pathMatch[1] !== 'analytics') return 'event-details';
+
+    const token = localStorage.getItem('auth_token');
+    const savedUser = localStorage.getItem('user');
+    if (token && savedUser) {
+      try {
+        const u = JSON.parse(savedUser);
+        if (u.role === 'super_admin' || u.role === 'admin') return 'super-admin';
+        if (u.role === 'host' || u.role === 'moderator') return 'dashboard';
+        return 'events';
+      } catch {
+        return 'login';
+      }
+    }
+    return 'login';
+  });
+
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Check if direct event link was visited: e.g. /?event=UUID or /events/UUID or /event/UUID
+    const urlParams = new URLSearchParams(window.location.search);
+    let targetEventId = urlParams.get('event');
+
+    if (!targetEventId) {
+      const pathMatch = window.location.pathname.match(/^\/events?\/([a-zA-Z0-9_-]+)/);
+      if (pathMatch && pathMatch[1] && pathMatch[1] !== 'analytics') {
+        targetEventId = pathMatch[1];
+      }
+    }
+
+    if (targetEventId) {
+      setActiveEventId(targetEventId);
       setCurrentPage('event-details');
     }
 
@@ -57,7 +103,7 @@ const App: React.FC = () => {
           const data = await response.json();
           setUser(data.user);
           localStorage.setItem('user', JSON.stringify(data.user)); 
-          if (!eventParam) {
+          if (!targetEventId && (currentPage === 'login' || !user)) {
             if (data.user.role === 'super_admin' || data.user.role === 'admin') {
               setCurrentPage('super-admin');
             } else if (data.user.role === 'host' || data.user.role === 'moderator') {
@@ -66,7 +112,7 @@ const App: React.FC = () => {
               setCurrentPage('events');
             }
           }
-        } else {
+        } else if (response.status === 401 || response.status === 403) {
           handleLogout();
         }
       } catch (err) {
@@ -178,7 +224,10 @@ const App: React.FC = () => {
             onBack={() => {
               const url = new URL(window.location.href);
               url.searchParams.delete('event');
-              window.history.pushState({}, '', url.pathname);
+              const cleanPath = window.location.pathname.startsWith('/event') ? '/' : window.location.pathname;
+              const newSearch = url.searchParams.toString();
+              window.history.pushState({}, '', `${cleanPath}${newSearch ? `?${newSearch}` : ''}`);
+              setActiveEventId(null);
               setCurrentPage(user ? (user.role === 'host' ? 'dashboard' : 'events') : 'login');
             }}
             onRequireLogin={() => setCurrentPage('login')}

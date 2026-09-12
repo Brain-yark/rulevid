@@ -305,6 +305,8 @@ export const publishEvent = async (req: Request, res: Response) => {
       include: { facilitator: { select: { id: true, email: true, companyName: true } } },
     });
 
+    socketService?.broadcastEventStatusChange(id as string, 'published');
+
     return res.json(updated);
   } catch (error: any) {
     console.error('[Event] Publish error:', error);
@@ -363,6 +365,7 @@ export const createTicketCheckout = async (req: Request, res: Response) => {
           amountCents: 0,
         },
       });
+
       return res.json({
         message: IS_MVP_MODE ? 'MVP Beta Pass: Ticket registered free without payment' : 'Free ticket registered successfully',
         ticket,
@@ -555,6 +558,23 @@ export const startEvent = async (req: Request, res: Response) => {
           });
         }
       }
+
+      // Ensure existing session also has an Agora Chat Room created
+      if (!session.agoraChatRoomId) {
+        try {
+          const chatUsername = getChatUsername(userEmail);
+          await agoraChatService.registerUser(chatUsername);
+          const agoraChatRoomId = await agoraChatService.createChatRoom(event.title, chatUsername);
+          if (agoraChatRoomId) {
+            session = await prisma.session.update({
+              where: { id: session.id },
+              data: { agoraChatRoomId },
+            });
+          }
+        } catch (chatErr) {
+          console.warn('[Event] Non-fatal Agora Chat setup notice for existing session:', chatErr);
+        }
+      }
     }
 
     // Start Agora Cloud Recording if configured
@@ -585,6 +605,9 @@ export const startEvent = async (req: Request, res: Response) => {
     const chatUsername = getChatUsername(userEmail);
     await agoraChatService.registerUser(chatUsername);
     const chatToken = agoraChatService.generateUserToken(chatUsername);
+
+    // Broadcast to all watching clients that this event is now live
+    socketService?.broadcastEventStatusChange(id as string, 'live', session.id);
 
     return res.json({
       event: { ...event, status: 'live', sessionId: session.id, canStartLive: true, earliestStartAt: timing.earliestStartAt },
@@ -737,6 +760,25 @@ export const joinEvent = async (req: Request, res: Response) => {
     const chatUsername = getChatUsername(userEmail);
     await agoraChatService.registerUser(chatUsername);
     const chatToken = agoraChatService.generateUserToken(chatUsername);
+
+    // If session does not have an Agora Chat room ID yet, ensure one is created
+    if (!session.agoraChatRoomId) {
+      try {
+        const hostEmail = await resolveUserEmail(event.facilitatorId);
+        const hostChatUsername = getChatUsername(hostEmail);
+        await agoraChatService.registerUser(hostChatUsername);
+        const newChatRoomId = await agoraChatService.createChatRoom(event.title, hostChatUsername);
+        if (newChatRoomId) {
+          await prisma.session.update({
+            where: { id: session.id },
+            data: { agoraChatRoomId: newChatRoomId },
+          });
+          session.agoraChatRoomId = newChatRoomId;
+        }
+      } catch (chatErr) {
+        console.warn('[Event] Agora Chat room auto-creation on join notice:', chatErr);
+      }
+    }
 
     // hostUid: for the host it matches their own token uid, for attendees we
     // compute the host's stable uid from the facilitatorId so the frontend can
@@ -899,6 +941,9 @@ export const endEvent = async (req: Request, res: Response) => {
         facilitator: { select: { id: true, email: true, companyName: true } },
       },
     });
+
+    // Broadcast to all watching clients that this event has ended
+    socketService?.broadcastEventStatusChange(id as string, 'ended');
 
     return res.json({
       message: 'Event ended successfully',

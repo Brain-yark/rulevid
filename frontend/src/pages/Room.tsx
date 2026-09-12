@@ -9,7 +9,11 @@ import {
   MessageSquare,
   Users,
   Settings,
-  Share2,
+  Monitor,
+  MonitorOff,
+  StopCircle,
+  Maximize2,
+  Minimize2,
   Hand,
   AlertTriangle,
   Volume2,
@@ -476,7 +480,10 @@ class RoomErrorBoundary extends Component<
   }
 }
 
-const defaultScreenConfig = {};
+const defaultScreenConfig = {
+  encoderConfig: "1080p_2" as const,
+  optimizationMode: "detail" as const,
+};
 
 export interface SessionParticipant {
   socketId: string;
@@ -600,6 +607,8 @@ const ActiveRoom: React.FC<{
   const [isSharing, setIsSharing] = useState(false);
   // For participants: tracks whether the host is currently screen sharing
   const [hostIsSharing, setHostIsSharing] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const isScreenSharingActive = isSharing || hostIsSharing;
   const socketRef = useRef<Socket | null>(null);
   const chatConnRef = useRef<null | any>(null);
   const tokenRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -844,17 +853,22 @@ const ActiveRoom: React.FC<{
         }
       },
       onTextMessage: (message: any) => {
-        console.log("[Chat] Message received:", message);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: message.id,
-            sender: message.from,
-            text: message.msg,
-            time: new Date().toLocaleTimeString(),
-            self: false,
-          },
-        ]);
+        console.log("[Chat] Message received via Agora:", message);
+        // Skip messages sent by self — socket.io already handles optimistic local add
+        if (message.from === config.chatUsername) return;
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === String(message.id))) return prev;
+          return [
+            ...prev,
+            {
+              id: String(message.id || Date.now()),
+              sender: message.from,
+              text: message.msg,
+              time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              self: false,
+            },
+          ];
+        });
       },
       onError: (error: any) => {
         console.error("[Chat] Error:", error);
@@ -928,23 +942,31 @@ const ActiveRoom: React.FC<{
     // Real-time Chat via Socket.io
     socket.on("message_received", (msgData: any) => {
       console.log("[Socket.io Chat] Message received:", msgData);
+      // Detect if message was sent by this client using multiple signals
       const isSelf = Boolean(
-        (msgData.senderId && storedUser?.id && msgData.senderId === storedUser.id) ||
-        (msgData.user && storedUser?.name && msgData.user === storedUser.name)
+        // Primary: match by socket id (most reliable)
+        (msgData.senderSocketId && msgData.senderSocketId === socket.id) ||
+        // Fallback: match by localId (optimistic message id we sent)
+        (msgData.localId && msgData.localId.startsWith("local_")) ||
+        // Fallback: match by userId
+        (msgData.senderId && storedUser?.id && msgData.senderId === storedUser.id && msgData.senderId !== "system")
       );
 
       setMessages((prev) => {
+        // Skip if this is our own message (already added optimistically)
+        if (isSelf) return prev;
+        // Skip duplicate by server-generated id
         if (prev.some((m) => m.id === String(msgData.id))) return prev;
         return [
           ...prev,
           {
             id: String(msgData.id || Date.now()),
-            sender: isSelf ? "You" : (msgData.user || "Participant"),
+            sender: msgData.user || "Participant",
             text: msgData.text,
             time: msgData.timestamp
               ? new Date(msgData.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            self: isSelf,
+            self: false,
           },
         ];
       });
@@ -1030,8 +1052,19 @@ const ActiveRoom: React.FC<{
 
     const handleStreamEnd = async (data: any) => {
       console.log("[Room] Received stream ending signal:", data);
+      // Show session-ended system message in the chat
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `system_end_${Date.now()}`,
+          sender: "System",
+          text: "🔴 This session has been ended by the host.",
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          self: false,
+        },
+      ]);
       await cleanupTracksAndLeave();
-      const msg = data?.message || "This live session has concluded.";
+      const msg = data?.message || "This live session has been ended by the host.";
       setStreamEndedMessage(msg);
       // Auto-redirect after 5 seconds
       setTimeout(() => onExit(), 5000);
@@ -1107,12 +1140,27 @@ const ActiveRoom: React.FC<{
     }
   };
 
+  const stopScreenShare = () => {
+    if (!isHost) return;
+    if (screenTrack) {
+      const tracks = Array.isArray(screenTrack) ? screenTrack : [screenTrack];
+      tracks.forEach((t) => {
+        try {
+          t.stop();
+          t.close();
+        } catch (e) {
+          console.warn("[Room] Error stopping screen track:", e);
+        }
+      });
+    }
+    setIsSharing(false);
+    socketRef.current?.emit("host_screen_share_stopped", { sessionId });
+  };
+
   const toggleScreenShare = () => {
     if (!isHost) return;
     if (isSharing) {
-      // Just flip the flag — useLocalScreenTrack will stop and unpublish the track
-      setIsSharing(false);
-      socketRef.current?.emit("host_screen_share_stopped", { sessionId });
+      stopScreenShare();
     } else {
       setIsSharing(true);
       socketRef.current?.emit("host_screen_share_started", { sessionId });
@@ -1126,8 +1174,7 @@ const ActiveRoom: React.FC<{
       : screenTrack
     : null;
   useTrackEvent(screenVideoTrack, "track-ended", () => {
-    setIsSharing(false);
-    socketRef.current?.emit("host_screen_share_stopped", { sessionId });
+    stopScreenShare();
   });
 
   const toggleHandRaise = () => {
@@ -1245,6 +1292,18 @@ const ActiveRoom: React.FC<{
       )
     )
       return;
+
+    // Broadcast a "session ended" system message to all attendees' chats
+    if (socketRef.current && sessionId) {
+      socketRef.current.emit("send_message", {
+        sessionId,
+        user: "System",
+        senderId: "system",
+        role: "system",
+        text: "🔴 This session has been ended by the host.",
+      });
+    }
+
     const authToken = localStorage.getItem("auth_token");
     try {
       if (eventId && config.isHost) {
@@ -1261,6 +1320,8 @@ const ActiveRoom: React.FC<{
     } catch (e) {
       console.error("Failed to end session/event on backend:", e);
     }
+    // Small delay to allow socket broadcast to reach all attendees before host disconnects
+    await new Promise((resolve) => setTimeout(resolve, 500));
     await cleanupTracksAndLeave();
     onExit();
   };
@@ -1288,7 +1349,20 @@ const ActiveRoom: React.FC<{
       storedUser?.email?.split("@")[0] ||
       (isHost ? "Host" : "Attendee");
 
-    // 1. Send immediately via Socket.io (instant, guaranteed real-time delivery to all participants)
+    // Optimistically add to local state immediately so sender sees it right away
+    const optimisticId = `local_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: optimisticId,
+        sender: "You",
+        text,
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        self: true,
+      },
+    ]);
+
+    // 1. Send via Socket.io (real-time delivery to all other participants)
     if (socketRef.current && sessionId) {
       socketRef.current.emit("send_message", {
         sessionId,
@@ -1296,6 +1370,7 @@ const ActiveRoom: React.FC<{
         senderId: storedUser?.id,
         role: isHost ? "host" : "attendee",
         text,
+        localId: optimisticId, // Let the server echo include this so we can deduplicate
       });
     }
 
@@ -1326,7 +1401,31 @@ const ActiveRoom: React.FC<{
   };
 
   return (
-    <div className={`room-container animate-fade-in${isSharing ? " is-sharing" : ""}`}>
+    <div
+      className={`room-container animate-fade-in${
+        isScreenSharingActive ? " is-sharing" : ""
+      }${isSidebarCollapsed ? " sidebar-collapsed" : ""}`}
+    >
+      {/* ── Floating Screen Share Host Controller Banner ── */}
+      {isHost && isSharing && (
+        <div className="host-screen-sharing-banner animate-fade-in">
+          <div className="sharing-status-badge">
+            <span className="pulsing-share-dot" />
+            <Monitor size={16} />
+            <span>You are sharing your screen</span>
+          </div>
+          <button
+            type="button"
+            className="stop-share-floating-btn"
+            onClick={stopScreenShare}
+            title="Stop Screen Share (releases your screen)"
+          >
+            <StopCircle size={16} />
+            <span>Stop Sharing</span>
+          </button>
+        </div>
+      )}
+
       {/* ── Session Ended Overlay ── */}
       {streamEndedMessage && (
         <div className="stream-ended-overlay">
@@ -1374,7 +1473,11 @@ const ActiveRoom: React.FC<{
       <div className="main-room-layout">
         <div className="video-area">
           <div className="video-grid">
-            <div className="video-tile main-host glass">
+            <div
+              className={`video-tile main-host glass ${
+                isScreenSharingActive ? "is-screen-sharing" : ""
+              }`}
+            >
               {isHost ? (
                 isSharing && screenTrack ? (
                   <LocalVideoTrack
@@ -1383,6 +1486,7 @@ const ActiveRoom: React.FC<{
                     }
                     play={true}
                     videoPlayerConfig={{ fit: "contain" }}
+                    className="screen-share-track"
                     style={{
                       width: "100%",
                       height: "100%",
@@ -1504,6 +1608,7 @@ const ActiveRoom: React.FC<{
                       track={hostVideoTrack}
                       play={true}
                       videoPlayerConfig={{ fit: hostIsSharing ? "contain" : "cover" }}
+                      className={hostIsSharing ? "screen-share-track" : "camera-track"}
                       style={{
                         width: "100%",
                         height: "100%",
@@ -1518,7 +1623,26 @@ const ActiveRoom: React.FC<{
                 </>
               )}
               <div className="live-indicator">
-                {isSharing ? "SCREEN SHARING" : isHost ? "LIVE" : "HOST FEED"}
+                {isScreenSharingActive ? "SCREEN SHARING" : isHost ? "LIVE" : "HOST FEED"}
+              </div>
+              <div className="tile-top-actions">
+                <button
+                  type="button"
+                  className="tile-action-btn"
+                  onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                  title={
+                    isSidebarCollapsed
+                      ? "Show Chat & Participants"
+                      : "Theater Mode (Expand Screen to full width)"
+                  }
+                >
+                  {isSidebarCollapsed ? (
+                    <Minimize2 size={16} />
+                  ) : (
+                    <Maximize2 size={16} />
+                  )}
+                  <span>{isSidebarCollapsed ? "Show Chat" : "Theater Mode"}</span>
+                </button>
               </div>
               <div
                 className="room-info"
@@ -1828,11 +1952,20 @@ const ActiveRoom: React.FC<{
                   {!isCameraOn ? <VideoOff /> : <VideoIcon />}
                 </button>
                 <button
-                  className={`control-btn ${isSharing ? "active-share" : ""}`}
+                  className={`control-btn ${
+                    isSharing ? "active-share-stop" : ""
+                  }`}
                   onClick={toggleScreenShare}
-                  title="Toggle Screen Share"
+                  title={isSharing ? "Stop Screen Share" : "Share Your Screen"}
                 >
-                  <Share2 />
+                  {isSharing ? (
+                    <>
+                      <MonitorOff size={20} />
+                      <span className="share-btn-text">Stop Share</span>
+                    </>
+                  ) : (
+                    <Monitor size={20} />
+                  )}
                 </button>
               </>
             ) : (
@@ -1873,6 +2006,19 @@ const ActiveRoom: React.FC<{
                 )}
               </>
             )}
+            {/* Theater Mode / Full Screen width toggle */}
+            <button
+              className={`control-btn ${isSidebarCollapsed ? "theater-active" : ""}`}
+              onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+              title={
+                isSidebarCollapsed
+                  ? "Exit Theater Mode (Show Chat)"
+                  : "Theater Mode (Expand Screen)"
+              }
+            >
+              {isSidebarCollapsed ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+            </button>
+
             <button
               className="control-btn"
               onClick={() => alert("Audio/Video settings")}
@@ -1933,10 +2079,11 @@ const ActiveRoom: React.FC<{
                 {messages.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`message-item ${msg.self ? "self" : ""}`}
+                    className={`message-item ${msg.self ? "self" : ""} ${msg.sender === "System" ? "system" : ""}`}
                   >
                     <span className="msg-user">{msg.sender}</span>
                     <p className="msg-text">{msg.text}</p>
+                    {msg.time && <span style={{ fontSize: "0.7rem", color: "#6b7280", display: "block", marginTop: "0.25rem", textAlign: msg.self ? "right" : "left" }}>{msg.time}</span>}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
@@ -2125,7 +2272,7 @@ const ActiveRoom: React.FC<{
         }
 
         /* Ensure agora-rtc-react internal div fills the tile, excluding badge overlays */
-        .video-tile > div:not(.live-indicator):not(.room-info):not(.video-placeholder) {
+        .video-tile > div:not(.live-indicator):not(.room-info):not(.video-placeholder):not(.tile-top-actions) {
           width: 100% !important;
           height: 100% !important;
         }
@@ -2137,23 +2284,171 @@ const ActiveRoom: React.FC<{
 
         /* ── Screen Share: full edge-to-edge layout ── */
         .is-sharing .video-area {
-          padding: 0;
-          gap: 0;
+          padding: 0.75rem;
+          gap: 0.75rem;
         }
 
         .is-sharing .video-grid {
-          gap: 0;
+          gap: 0.75rem;
         }
 
-        .is-sharing .main-host {
-          border-radius: 0;
-          box-shadow: none;
+        .is-sharing .main-host,
+        .video-tile.is-screen-sharing {
+          border-radius: 12px;
+          background: #000 !important;
+          border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        /* Override global cover so screen content isn't cropped */
-        .is-sharing .video-tile video {
+        /* Force contain on ALL screen sharing video elements so left & right edges are never cut off */
+        .is-sharing .video-tile video,
+        .video-tile.is-screen-sharing video,
+        .is-sharing .main-host video,
+        .video-tile video.screen-share-track,
+        .screen-share-track video {
           object-fit: contain !important;
-          background: #000;
+          background: #000 !important;
+          width: 100% !important;
+          height: 100% !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          position: absolute !important;
+        }
+
+        /* When theater mode / sidebar is collapsed */
+        .sidebar-collapsed .side-panel {
+          display: none !important;
+        }
+
+        .sidebar-collapsed .video-area {
+          padding: 0.5rem;
+        }
+
+        .sidebar-collapsed .audience-grid {
+          height: 85px;
+        }
+
+        .sidebar-collapsed .attendee-profile-card {
+          flex: 0 0 115px;
+          height: 75px;
+        }
+
+        /* Floating host screen sharing indicator */
+        .host-screen-sharing-banner {
+          position: absolute;
+          top: 14px;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          background: rgba(15, 23, 42, 0.9);
+          backdrop-filter: blur(12px);
+          border: 1px solid rgba(239, 68, 68, 0.5);
+          box-shadow: 0 4px 20px rgba(239, 68, 68, 0.35);
+          padding: 8px 18px;
+          border-radius: 30px;
+        }
+
+        .sharing-status-badge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #fca5a5;
+          font-size: 0.88rem;
+          font-weight: 600;
+        }
+
+        .pulsing-share-dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #ef4444;
+          box-shadow: 0 0 10px #ef4444;
+          animation: pulse 1.5s infinite;
+        }
+
+        .stop-share-floating-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: #ef4444;
+          color: #fff;
+          border: none;
+          padding: 6px 14px;
+          border-radius: 20px;
+          font-size: 0.82rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .stop-share-floating-btn:hover {
+          background: #dc2626;
+          transform: scale(1.04);
+        }
+
+        .control-btn.active-share-stop {
+          background: #ef4444 !important;
+          color: #fff !important;
+          width: auto !important;
+          padding: 0 16px !important;
+          border-radius: 30px !important;
+          display: flex !important;
+          align-items: center !important;
+          gap: 8px !important;
+          box-shadow: 0 0 16px rgba(239, 68, 68, 0.5) !important;
+        }
+
+        .control-btn.active-share-stop:hover {
+          background: #dc2626 !important;
+          transform: scale(1.05);
+        }
+
+        .control-btn.theater-active {
+          background: rgba(99, 102, 241, 0.3) !important;
+          color: #818cf8 !important;
+          border-color: rgba(99, 102, 241, 0.5) !important;
+        }
+
+        .share-btn-text {
+          font-size: 0.85rem;
+          font-weight: 700;
+          white-space: nowrap;
+        }
+
+        .tile-top-actions {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          z-index: 50;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .tile-action-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 12px;
+          border-radius: 8px;
+          background: rgba(15, 23, 42, 0.75);
+          backdrop-filter: blur(8px);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          color: #e2e8f0;
+          font-size: 0.8rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .tile-action-btn:hover {
+          background: rgba(30, 41, 59, 0.9);
+          border-color: rgba(99, 102, 241, 0.5);
+          color: #fff;
         }
 
         .audience-grid {
@@ -2504,6 +2799,41 @@ const ActiveRoom: React.FC<{
           background: rgba(255, 255, 255, 0.03);
           padding: 0.75rem;
           border-radius: 12px;
+          border: 1px solid transparent;
+        }
+
+        .message-item.self {
+          background: rgba(99, 102, 241, 0.15);
+          border-color: rgba(99, 102, 241, 0.25);
+          align-self: flex-end;
+          max-width: 85%;
+        }
+
+        .message-item.self .msg-user {
+          color: #a5b4fc;
+          text-align: right;
+        }
+
+        .message-item.self .msg-text {
+          text-align: right;
+        }
+
+        .message-item.system {
+          background: rgba(251, 191, 36, 0.08);
+          border-color: rgba(251, 191, 36, 0.2);
+          text-align: center;
+        }
+
+        .message-item.system .msg-user {
+          color: #fbbf24;
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .message-item.system .msg-text {
+          font-size: 0.82rem;
+          color: #d1d5db;
         }
 
         .msg-user {
@@ -2517,6 +2847,7 @@ const ActiveRoom: React.FC<{
         .msg-text {
           font-size: 0.9rem;
           color: var(--text-main);
+          margin: 0;
         }
 
         .chat-input-area {

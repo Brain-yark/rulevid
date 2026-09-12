@@ -16,6 +16,9 @@ import {
 } from 'lucide-react';
 import type { Event } from '../../../shared/types';
 import { API_BASE } from '../config';
+import { EventShareModal } from '../components/EventShareModal';
+import { copyToClipboard } from '../utils/clipboard';
+import { getGlobalSocket } from '../utils/socket';
 
 interface EventDetailsPageProps {
   eventId: string;
@@ -36,23 +39,16 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [countdownText, setCountdownText] = useState('');
+  const [liveNotice, setLiveNotice] = useState<string | null>(null);
 
   const token = localStorage.getItem('auth_token');
 
-  useEffect(() => {
-    // Check url params for payment confirmation
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('payment') === 'success') {
-      setPaymentSuccess(true);
-    }
-    fetchEventDetails();
-  }, [eventId]);
-
-  const fetchEventDetails = async () => {
+  const fetchEventDetails = async (silent: boolean = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const headers: Record<string, string> = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
@@ -66,9 +62,58 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
     } catch (err) {
       console.error('Failed to load event details:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // Check url params for payment confirmation
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('payment') === 'success') {
+      setPaymentSuccess(true);
+    }
+    fetchEventDetails(false);
+
+    // Set up real-time socket subscription for this specific event
+    const socket = getGlobalSocket();
+    socket.emit('watch_event', eventId);
+
+    const handleStatusChanged = (data: { eventId: string; status: string; sessionId?: string }) => {
+      if (data && data.eventId === eventId) {
+        console.log(`[EventDetailsPage] Real-time status update: ${data.status}`);
+        setEvent((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            status: data.status as any,
+            ...(data.sessionId ? { sessionId: data.sessionId } : {}),
+          };
+        });
+
+        if (data.status === 'live') {
+          setLiveNotice('The host has just started the live stream! Click below to enter.');
+        } else if (data.status === 'ended') {
+          setLiveNotice(null);
+        }
+
+        // Silently fetch full event data in background
+        fetchEventDetails(true);
+      }
+    };
+
+    socket.on('event_status_changed', handleStatusChanged);
+
+    // Fallback sync interval: auto-refresh status every 15s without any page reload
+    const pollInterval = setInterval(() => {
+      fetchEventDetails(true);
+    }, 15000);
+
+    return () => {
+      socket.emit('unwatch_event', eventId);
+      socket.off('event_status_changed', handleStatusChanged);
+      clearInterval(pollInterval);
+    };
+  }, [eventId]);
 
   // Live countdown timer
   useEffect(() => {
@@ -166,10 +211,11 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
     }
   };
 
-  const handleCopyLink = () => {
+  const handleCopyLink = async () => {
     const url = `${window.location.origin}/?event=${eventId}`;
-    navigator.clipboard.writeText(url);
+    await copyToClipboard(url);
     setCopied(true);
+    setIsShareModalOpen(true);
     setTimeout(() => setCopied(false), 2500);
   };
 
@@ -218,6 +264,66 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
             <h4>Ticket Purchase Confirmed!</h4>
             <p>Your payment was processed successfully. Your live seat is reserved.</p>
           </div>
+        </div>
+      )}
+
+      {/* Real-time Host Live Alert Banner */}
+      {liveNotice && isLive && (
+        <div className="live-alert-banner animate-fade-in" style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(5, 150, 105, 0.15))',
+          border: '1px solid rgba(16, 185, 129, 0.5)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          marginBottom: '1.5rem',
+          color: '#34d399',
+          boxShadow: '0 8px 24px rgba(16, 185, 129, 0.2)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              background: 'rgba(16, 185, 129, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#10b981',
+            }}>
+              <Radio size={22} className="animate-pulse" />
+            </div>
+            <div>
+              <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>The Event is LIVE Now!</h4>
+              <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.875rem', color: '#a7f3d0' }}>{liveNotice}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => onJoinRoom(event.id)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.7rem 1.4rem',
+              background: '#10b981',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: 700,
+              fontSize: '0.95rem',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)',
+              transition: 'transform 0.15s ease',
+            }}
+            onMouseOver={(e) => (e.currentTarget.style.transform = 'scale(1.03)')}
+            onMouseOut={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+          >
+            <Play size={18} fill="currentColor" />
+            <span>Enter Stream</span>
+          </button>
         </div>
       )}
 
@@ -427,6 +533,13 @@ const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Share Modal */}
+      <EventShareModal
+        isOpen={isShareModalOpen}
+        event={event}
+        onClose={() => setIsShareModalOpen(false)}
+      />
 
       {/* Styled JSX */}
       <style>{`
