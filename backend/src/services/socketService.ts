@@ -84,6 +84,15 @@ export class SocketService {
         this.broadcastParticipants(sessionId);
       });
 
+      // Screen Share: relay host sharing state to all participants
+      socket.on('host_screen_share_started', (data: { sessionId: string }) => {
+        this.io.to(data.sessionId).emit('host_screen_share_started');
+      });
+
+      socket.on('host_screen_share_stopped', (data: { sessionId: string }) => {
+        this.io.to(data.sessionId).emit('host_screen_share_stopped');
+      });
+
       // Hand Raising: Attendee requests to speak
       socket.on('raise_hand', (data: { sessionId: string; userId?: string; name?: string }) => {
         const { sessionId } = data;
@@ -151,12 +160,20 @@ export class SocketService {
         this.broadcastParticipants(sessionId);
       });
 
-      // Text Chat fallback
-      socket.on('send_message', (data: { sessionId: string; user: string; text: string }) => {
+      // Real-time Session Chat
+      socket.on('send_message', (data: { sessionId: string; user?: string; senderId?: string; role?: string; text: string }) => {
+        if (!data || !data.sessionId || !data.text?.trim()) return;
+        const participantsMap = this.sessionParticipants.get(data.sessionId);
+        const participant = participantsMap?.get(socket.id);
+        const senderName = data.user || participant?.name || 'Participant';
+
         this.io.to(data.sessionId).emit('message_received', {
-          id: Date.now(),
-          user: data.user,
-          text: data.text,
+          id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          sessionId: data.sessionId,
+          user: senderName,
+          senderId: data.senderId || participant?.userId || socket.id,
+          role: data.role || participant?.role || 'attendee',
+          text: data.text.trim(),
           timestamp: new Date().toISOString(),
         });
       });

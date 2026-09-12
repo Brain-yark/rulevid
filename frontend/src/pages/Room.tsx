@@ -29,6 +29,7 @@ import {
   useRemoteUsers,
   useRemoteUserTrack,
   useLocalScreenTrack,
+  useTrackEvent,
   useRTCClient,
   useConnectionState,
 } from "agora-rtc-react";
@@ -594,8 +595,11 @@ const ActiveRoom: React.FC<{
     { id: string; sender: string; text: string; time: string; self: boolean }[]
   >([]);
   const [inputMessage, setInputMessage] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [participantCount, setParticipantCount] = useState(1);
   const [isSharing, setIsSharing] = useState(false);
+  // For participants: tracks whether the host is currently screen sharing
+  const [hostIsSharing, setHostIsSharing] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const chatConnRef = useRef<null | any>(null);
   const tokenRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -832,7 +836,9 @@ const ActiveRoom: React.FC<{
       onConnected: () => {
         console.log("[Chat] Connected to Agora Chat");
         if (config.agoraChatRoomId) {
-          conn.joinChatRoom({ roomId: config.agoraChatRoomId });
+          conn.joinChatRoom({ roomId: config.agoraChatRoomId })
+            .then(() => console.log("[Chat] Successfully joined Agora chat room:", config.agoraChatRoomId))
+            .catch((err: any) => console.warn("[Chat] Agora joinChatRoom notice:", err));
         } else {
           console.warn("[Chat] No chat room ID available for this session.");
         }
@@ -917,6 +923,31 @@ const ActiveRoom: React.FC<{
 
     socket.on("count_updated", (data) => {
       setParticipantCount(data.count);
+    });
+
+    // Real-time Chat via Socket.io
+    socket.on("message_received", (msgData: any) => {
+      console.log("[Socket.io Chat] Message received:", msgData);
+      const isSelf = Boolean(
+        (msgData.senderId && storedUser?.id && msgData.senderId === storedUser.id) ||
+        (msgData.user && storedUser?.name && msgData.user === storedUser.name)
+      );
+
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === String(msgData.id))) return prev;
+        return [
+          ...prev,
+          {
+            id: String(msgData.id || Date.now()),
+            sender: isSelf ? "You" : (msgData.user || "Participant"),
+            text: msgData.text,
+            time: msgData.timestamp
+              ? new Date(msgData.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            self: isSelf,
+          },
+        ];
+      });
     });
 
     socket.on("participants_updated", (rawParticipants: any) => {
@@ -1009,6 +1040,14 @@ const ActiveRoom: React.FC<{
     socket.on("stream_ended", handleStreamEnd);
     socket.on("billing:stream_ending", handleStreamEnd);
 
+    // Screen share state broadcast from host
+    socket.on("host_screen_share_started", () => {
+      setHostIsSharing(true);
+    });
+    socket.on("host_screen_share_stopped", () => {
+      setHostIsSharing(false);
+    });
+
     return () => {
       socket.emit("leave_session", sessionId);
       socket.disconnect();
@@ -1071,21 +1110,25 @@ const ActiveRoom: React.FC<{
   const toggleScreenShare = () => {
     if (!isHost) return;
     if (isSharing) {
-      if (screenTrack) {
-        const tracks = Array.isArray(screenTrack) ? screenTrack : [screenTrack];
-        tracks.forEach((t) => {
-          try {
-            t.getMediaStreamTrack()?.stop();
-          } catch {}
-          t.stop();
-          t.close();
-        });
-      }
+      // Just flip the flag — useLocalScreenTrack will stop and unpublish the track
       setIsSharing(false);
+      socketRef.current?.emit("host_screen_share_stopped", { sessionId });
     } else {
       setIsSharing(true);
+      socketRef.current?.emit("host_screen_share_started", { sessionId });
     }
   };
+
+  // Detect when the user clicks "Stop sharing" in the browser's native dialog
+  const screenVideoTrack = screenTrack
+    ? Array.isArray(screenTrack)
+      ? screenTrack[0]
+      : screenTrack
+    : null;
+  useTrackEvent(screenVideoTrack, "track-ended", () => {
+    setIsSharing(false);
+    socketRef.current?.emit("host_screen_share_stopped", { sessionId });
+  });
 
   const toggleHandRaise = () => {
     if (!socketRef.current) return;
@@ -1222,36 +1265,64 @@ const ActiveRoom: React.FC<{
     onExit();
   };
 
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputMessage.trim() && chatConnRef.current) {
-      const msg = Chat.message.create({
-        type: "txt",
-        msg: inputMessage,
-        to: config.agoraChatRoomId,
-        chatType: "chatRoom",
-      });
+    const text = inputMessage.trim();
+    if (!text) return;
 
-      chatConnRef.current
-        .send(msg)
-        .then(() => {
-          console.log("[Chat] Message sent");
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: Date.now().toString(),
-              sender: config.chatUsername,
-              text: inputMessage,
-              time: new Date().toLocaleTimeString(),
-              self: true,
-            },
-          ]);
-          setInputMessage("");
-        })
-        .catch((err: unknown) => {
-          console.error("[Chat] Failed to send message:", err);
-        });
+    const storedUser = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("user") || "{}");
+      } catch {
+        return {};
+      }
+    })();
+
+    const senderDisplayName =
+      storedUser?.name ||
+      storedUser?.email?.split("@")[0] ||
+      (isHost ? "Host" : "Attendee");
+
+    // 1. Send immediately via Socket.io (instant, guaranteed real-time delivery to all participants)
+    if (socketRef.current && sessionId) {
+      socketRef.current.emit("send_message", {
+        sessionId,
+        user: senderDisplayName,
+        senderId: storedUser?.id,
+        role: isHost ? "host" : "attendee",
+        text,
+      });
     }
+
+    // 2. Also send via Agora Chat SDK if active and room is defined
+    if (chatConnRef.current && config.agoraChatRoomId) {
+      try {
+        const msg = Chat.message.create({
+          type: "txt",
+          msg: text,
+          to: config.agoraChatRoomId,
+          chatType: "chatRoom",
+        });
+
+        chatConnRef.current
+          .send(msg)
+          .then(() => {
+            console.log("[Chat] Agora message sent");
+          })
+          .catch((err: unknown) => {
+            console.warn("[Chat] Agora chat notice (message delivered via Socket.io):", err);
+          });
+      } catch (err) {
+        console.warn("[Chat] Agora create message notice:", err);
+      }
+    }
+
+    setInputMessage("");
   };
 
   return (
@@ -1311,10 +1382,10 @@ const ActiveRoom: React.FC<{
                       Array.isArray(screenTrack) ? screenTrack[0] : screenTrack
                     }
                     play={true}
+                    videoPlayerConfig={{ fit: "contain" }}
                     style={{
                       width: "100%",
                       height: "100%",
-                      objectFit: "contain",
                       position: "absolute",
                       top: 0,
                       left: 0,
@@ -1432,10 +1503,10 @@ const ActiveRoom: React.FC<{
                     <RemoteVideoTrack
                       track={hostVideoTrack}
                       play={true}
+                      videoPlayerConfig={{ fit: hostIsSharing ? "contain" : "cover" }}
                       style={{
                         width: "100%",
                         height: "100%",
-                        objectFit: "cover",
                       }}
                     />
                   ) : (
@@ -1868,6 +1939,7 @@ const ActiveRoom: React.FC<{
                     <p className="msg-text">{msg.text}</p>
                   </div>
                 ))}
+                <div ref={messagesEndRef} />
               </div>
               <form className="chat-input-area" onSubmit={handleSendMessage}>
                 <input
@@ -2046,7 +2118,7 @@ const ActiveRoom: React.FC<{
         .video-tile video {
           width: 100% !important;
           height: 100% !important;
-          object-fit: cover !important;
+          object-fit: cover;
           position: absolute;
           top: 0;
           left: 0;
