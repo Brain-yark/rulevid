@@ -59,69 +59,90 @@ export class SocketService {
       });
 
       // Join session with optional rich user profile metadata
-      socket.on('join_session', (payload: string | { sessionId: string; user?: any }) => {
+      socket.on('join_session', (payload: string | { sessionId: string; eventId?: string; user?: any }) => {
         const sessionId = typeof payload === 'string' ? payload : payload?.sessionId;
+        const eventId = typeof payload === 'object' ? payload?.eventId : undefined;
         const userData = typeof payload === 'object' ? payload?.user : null;
 
-        if (!sessionId) return;
+        if (!sessionId && !eventId) return;
 
-        socket.join(sessionId);
-        logger.info(`[Socket] Socket ${socket.id} joined session ${sessionId}`);
+        const targetRooms = new Set<string>();
+        if (sessionId) targetRooms.add(sessionId);
+        if (eventId) targetRooms.add(eventId);
 
-        // Register participant profile
-        if (!this.sessionParticipants.has(sessionId)) {
-          this.sessionParticipants.set(sessionId, new Map());
-        }
+        targetRooms.forEach((room) => {
+          socket.join(room);
+          logger.info(`[Socket] Socket ${socket.id} joined room ${room}`);
+        });
 
-        const participantsMap = this.sessionParticipants.get(sessionId)!;
         const isHost = userData?.role === 'host' || userData?.isHost === true;
         const displayName = userData?.name?.trim() ||
           (isHost ? 'Host' : (userData?.email ? userData.email.split('@')[0] : `Guest_${socket.id.substring(0, 5)}`));
 
-        participantsMap.set(socket.id, {
-          socketId: socket.id,
-          userId: userData?.id || userData?.userId,
-          name: displayName,
-          email: userData?.email,
-          role: isHost ? 'host' : 'attendee',
-          agoraUid: userData?.agoraUid ? Number(userData.agoraUid) : undefined,
-          isHost,
-          handRaised: false,
-          canSpeak: isHost, // Host can always speak; attendees need permission
-          joinedAt: new Date().toISOString(),
-        });
+        for (const room of targetRooms) {
+          if (!this.sessionParticipants.has(room)) {
+            this.sessionParticipants.set(room, new Map());
+          }
 
-        this.broadcastParticipantCount(sessionId);
-        this.broadcastParticipants(sessionId);
-        this.syncSessionParticipantCount(sessionId, this.getAudienceCount(sessionId));
+          const participantsMap = this.sessionParticipants.get(room)!;
+          participantsMap.set(socket.id, {
+            socketId: socket.id,
+            userId: userData?.id || userData?.userId,
+            name: displayName,
+            email: userData?.email,
+            role: isHost ? 'host' : 'attendee',
+            agoraUid: userData?.agoraUid ? Number(userData.agoraUid) : undefined,
+            isHost,
+            handRaised: false,
+            canSpeak: isHost, // Host can always speak; attendees need permission
+            joinedAt: new Date().toISOString(),
+          });
 
-        // If this session currently has an active screen share, notify the newcomer immediately
-        if (this.activeScreenShares.has(sessionId)) {
-          socket.emit('host_screen_share_started');
+          this.broadcastParticipantCount(room);
+          this.broadcastParticipants(room);
+          this.syncSessionParticipantCount(room, this.getAudienceCount(room));
+
+          if (this.activeScreenShares.has(room)) {
+            socket.emit('host_screen_share_started');
+          }
         }
       });
 
       // Leave session
-      socket.on('leave_session', (sessionId: string) => {
-        socket.leave(sessionId);
-        this.removeParticipant(sessionId, socket.id);
-        this.broadcastParticipantCount(sessionId);
-        this.broadcastParticipants(sessionId);
+      socket.on('leave_session', (payload: string | { sessionId?: string; eventId?: string }) => {
+        const roomsToLeave = new Set<string>();
+        if (typeof payload === 'string') roomsToLeave.add(payload);
+        else if (payload) {
+          if (payload.sessionId) roomsToLeave.add(payload.sessionId);
+          if (payload.eventId) roomsToLeave.add(payload.eventId);
+        }
+        roomsToLeave.forEach((room) => {
+          socket.leave(room);
+          this.removeParticipant(room, socket.id);
+          this.broadcastParticipantCount(room);
+          this.broadcastParticipants(room);
+        });
       });
 
       // Screen Share: relay host sharing state to all participants
-      socket.on('host_screen_share_started', (data: { sessionId: string }) => {
-        if (data?.sessionId) {
-          this.activeScreenShares.add(data.sessionId);
-          this.io.to(data.sessionId).emit('host_screen_share_started');
-        }
+      socket.on('host_screen_share_started', (data: { sessionId?: string; eventId?: string }) => {
+        const rooms = new Set<string>();
+        if (data?.sessionId) rooms.add(data.sessionId);
+        if (data?.eventId) rooms.add(data.eventId);
+        rooms.forEach((room) => {
+          this.activeScreenShares.add(room);
+          this.io.to(room).emit('host_screen_share_started');
+        });
       });
 
-      socket.on('host_screen_share_stopped', (data: { sessionId: string }) => {
-        if (data?.sessionId) {
-          this.activeScreenShares.delete(data.sessionId);
-          this.io.to(data.sessionId).emit('host_screen_share_stopped');
-        }
+      socket.on('host_screen_share_stopped', (data: { sessionId?: string; eventId?: string }) => {
+        const rooms = new Set<string>();
+        if (data?.sessionId) rooms.add(data.sessionId);
+        if (data?.eventId) rooms.add(data.eventId);
+        rooms.forEach((room) => {
+          this.activeScreenShares.delete(room);
+          this.io.to(room).emit('host_screen_share_stopped');
+        });
       });
 
       // Hand Raising: Attendee requests to speak
@@ -192,27 +213,36 @@ export class SocketService {
       });
 
       // Real-time Session Chat
-      socket.on('send_message', (data: { sessionId: string; user?: string; senderId?: string; role?: string; text: string; localId?: string }) => {
-        if (!data || !data.sessionId || !data.text?.trim()) return;
-        const participantsMap = this.sessionParticipants.get(data.sessionId);
+      socket.on('send_message', (data: { sessionId?: string; eventId?: string; user?: string; senderId?: string; role?: string; text: string; localId?: string }) => {
+        if (!data || (!data.sessionId && !data.eventId) || !data.text?.trim()) return;
+
+        // Use a single canonical broadcast room to prevent duplicate delivery
+        // (clients join both sessionId and eventId rooms — broadcasting to both would duplicate)
+        const broadcastRoom = data.eventId || data.sessionId!;
+        const primaryRoom = data.sessionId || data.eventId!;
+
+        const participantsMap = this.sessionParticipants.get(primaryRoom)
+          ?? this.sessionParticipants.get(broadcastRoom);
         const participant = participantsMap?.get(socket.id);
         const senderName = data.user || participant?.name || 'Participant';
         const msgId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-        // Broadcast to ALL sockets in the room (server-generated id)
-        // The sender's own socket will receive this too, but the client skips it
-        // because isSelf=true messages are now filtered out on the receiving end.
-        this.io.to(data.sessionId).emit('message_received', {
+        const messagePayload = {
           id: msgId,
-          localId: data.localId, // Echo back so sender can deduplicate if needed
+          localId: data.localId,
           sessionId: data.sessionId,
+          eventId: data.eventId,
           user: senderName,
           senderId: data.senderId || participant?.userId || socket.id,
-          senderSocketId: socket.id, // Include socket id for self-detection
+          senderSocketId: socket.id,
           role: data.role || participant?.role || 'attendee',
           text: data.text.trim(),
           timestamp: new Date().toISOString(),
-        });
+        };
+
+        // Single broadcast to the canonical room — no duplicates
+        this.io.to(broadcastRoom).emit('message_received', messagePayload);
+        logger.info(`[Socket] Chat message broadcast to room [${broadcastRoom}] from ${senderName} (${socket.id})`);
       });
 
       socket.on('disconnecting', () => {
@@ -292,10 +322,14 @@ export class SocketService {
    * Broadcast stream_ended to all participants in a session so their browsers
    * cleanly unmount Agora tracks, stop sending/receiving RTC packets, and leave the room.
    */
-  public broadcastStreamEnded(sessionId: string, message: string = 'This live session has concluded.') {
-    this.io.to(sessionId).emit('stream_ended', { sessionId, message });
-    this.io.to(sessionId).emit('billing:stream_ending', { sessionId, message });
-    logger.info({ sessionId }, '[SocketService] Broadcasted stream_ended to session participants');
+  public broadcastStreamEnded(sessionId: string, message: string = 'This live session has concluded.', eventId?: string) {
+    this.io.to(sessionId).emit('stream_ended', { sessionId, eventId, message });
+    this.io.to(sessionId).emit('billing:stream_ending', { sessionId, eventId, message });
+    if (eventId && eventId !== sessionId) {
+      this.io.to(eventId).emit('stream_ended', { sessionId, eventId, message });
+      this.io.to(eventId).emit('billing:stream_ending', { sessionId, eventId, message });
+    }
+    logger.info({ sessionId, eventId }, '[SocketService] Broadcasted stream_ended to session participants');
   }
 
   /**

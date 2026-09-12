@@ -939,10 +939,15 @@ const ActiveRoom: React.FC<{
 
   // ─── Socket.io Presence & Billing Monitoring ───────────────────────────────
   useEffect(() => {
-    if (!sessionId) return; // Wait until the session ID is resolved
+    if (!sessionId && !eventId) return; // Wait until session ID or event ID is resolved
 
     const socket = io(API_BASE || undefined, {
       withCredentials: true,
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
     socketRef.current = socket;
 
@@ -954,26 +959,38 @@ const ActiveRoom: React.FC<{
       }
     })();
 
-    if (storedUser?.id) {
-      socket.emit("register_user", storedUser.id);
-    }
-
-    // Join the socket room keyed by the actual session DB ID
     const hostDisplayName = storedUser?.name
       ? `${storedUser.name} (Host)`
       : "Host";
     const attendeeDisplayName = storedUser?.name || "Attendee";
-    socket.emit("join_session", {
-      sessionId,
-      user: {
-        id: storedUser?.id,
-        name: isHost ? hostDisplayName : attendeeDisplayName,
-        email: storedUser?.email,
-        isHost: isHost,
-        role: isHost ? "host" : "attendee",
-        agoraUid: config.uid,
-      },
+
+    const joinSessionRoom = () => {
+      console.log("[Socket.io] Joining room with ID:", socket.id, "Session:", sessionId, "Event:", eventId);
+      if (storedUser?.id) {
+        socket.emit("register_user", storedUser.id);
+      }
+      socket.emit("join_session", {
+        sessionId,
+        eventId,
+        user: {
+          id: storedUser?.id,
+          name: isHost ? hostDisplayName : attendeeDisplayName,
+          email: storedUser?.email,
+          isHost: isHost,
+          role: isHost ? "host" : "attendee",
+          agoraUid: config.uid,
+        },
+      });
+    };
+
+    socket.on("connect", () => {
+      console.log("[Socket.io] Connected successfully with ID:", socket.id);
+      joinSessionRoom();
     });
+
+    if (socket.connected) {
+      joinSessionRoom();
+    }
 
     socket.on("count_updated", (data) => {
       setParticipantCount(data.count);
@@ -1127,10 +1144,10 @@ const ActiveRoom: React.FC<{
     });
 
     return () => {
-      socket.emit("leave_session", sessionId);
+      socket.emit("leave_session", { sessionId, eventId });
       socket.disconnect();
     };
-  }, [sessionId, onExit, isHost]);
+  }, [sessionId, eventId, onExit, isHost]);
 
   const handleInStreamTopup = async () => {
     setIsTopupProcessing(true);
@@ -1199,7 +1216,7 @@ const ActiveRoom: React.FC<{
       });
     }
     setIsSharing(false);
-    socketRef.current?.emit("host_screen_share_stopped", { sessionId });
+    socketRef.current?.emit("host_screen_share_stopped", { sessionId, eventId });
   };
 
   const toggleScreenShare = () => {
@@ -1208,7 +1225,7 @@ const ActiveRoom: React.FC<{
       stopScreenShare();
     } else {
       setIsSharing(true);
-      socketRef.current?.emit("host_screen_share_started", { sessionId });
+      socketRef.current?.emit("host_screen_share_started", { sessionId, eventId });
     }
   };
 
@@ -1400,14 +1417,15 @@ const ActiveRoom: React.FC<{
     ]);
 
     // 1. Send via Socket.io (real-time delivery to all other participants)
-    if (socketRef.current && sessionId) {
+    if (socketRef.current && (sessionId || eventId)) {
       socketRef.current.emit("send_message", {
         sessionId,
+        eventId,      // Always include eventId so server broadcasts to the canonical event room
         user: senderDisplayName,
         senderId: storedUser?.id,
         role: isHost ? "host" : "attendee",
         text,
-        localId: optimisticId, // Let the server echo include this so we can deduplicate
+        localId: optimisticId,
       });
     }
 
