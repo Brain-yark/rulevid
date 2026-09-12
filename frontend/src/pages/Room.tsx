@@ -79,6 +79,7 @@ const Room: React.FC<RoomProps> = ({
   const [resolvedSessionId, setResolvedSessionId] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isScheduled, setIsScheduled] = useState<boolean>(false);
+  const [isSessionEnded, setIsSessionEnded] = useState<boolean>(false);
   const [scheduledStartsAt, setScheduledStartsAt] = useState<string | null>(
     null,
   );
@@ -104,6 +105,15 @@ const Room: React.FC<RoomProps> = ({
         if (!res.ok) {
           const msg =
             data.message || data.error || "Failed to access live session";
+          if (
+            data.error === "Event has ended" ||
+            data.error === "Event has concluded" ||
+            (typeof msg === "string" && msg.toLowerCase().includes("ended")) ||
+            data.status === "ended"
+          ) {
+            setIsSessionEnded(true);
+            return;
+          }
           console.error("[Room] API error joining live session:", {
             status: res.status,
             data,
@@ -186,6 +196,18 @@ const Room: React.FC<RoomProps> = ({
         });
 
         const data = await res.json();
+
+        if (
+          !res.ok &&
+          (data.error === "Event has ended" ||
+            data.error === "Event has concluded" ||
+            (typeof data.message === "string" &&
+              data.message.toLowerCase().includes("ended")) ||
+            data.status === "ended")
+        ) {
+          setIsSessionEnded(true);
+          return;
+        }
 
         if (res.ok && data.agoraToken && data.status !== "scheduled") {
           const channelName =
@@ -299,7 +321,7 @@ const Room: React.FC<RoomProps> = ({
     );
   }
 
-  if (isScheduled) {
+  if (isScheduled || isSessionEnded) {
     return (
       <div
         className="room-container scheduled-state glass-card animate-fade-in"
@@ -311,9 +333,16 @@ const Room: React.FC<RoomProps> = ({
         }}
       >
         <h3
-          style={{ color: "#6366f1", marginBottom: "1rem", fontSize: "1.4rem" }}
+          style={{
+            color: isSessionEnded ? "#ef4444" : "#6366f1",
+            marginBottom: "1rem",
+            fontSize: "1.4rem",
+            fontWeight: 700,
+          }}
         >
-          Ticket Confirmed — Waiting for Host
+          {isSessionEnded
+            ? "🔴 This session has been ended by the host"
+            : "Ticket Confirmed — Waiting for Host"}
         </h3>
         <p
           style={{
@@ -322,19 +351,22 @@ const Room: React.FC<RoomProps> = ({
             lineHeight: "1.5",
           }}
         >
-          Your seat is confirmed! The host has not started the live broadcast
-          yet.
+          {isSessionEnded
+            ? "The host has concluded this live event. Thank you for attending!"
+            : "Your seat is confirmed! The host has not started the live broadcast yet."}
         </p>
-        <p
-          style={{
-            color: "#64748b",
-            fontSize: "0.85rem",
-            marginBottom: "1.5rem",
-          }}
-        >
-          Auto-refreshing every 3 seconds...
-        </p>
-        {scheduledStartsAt && (
+        {!isSessionEnded && (
+          <p
+            style={{
+              color: "#64748b",
+              fontSize: "0.85rem",
+              marginBottom: "1.5rem",
+            }}
+          >
+            Auto-refreshing every 3 seconds...
+          </p>
+        )}
+        {!isSessionEnded && scheduledStartsAt && (
           <p
             style={{ color: "#f8fafc", fontWeight: 600, marginBottom: "2rem" }}
           >
@@ -349,28 +381,35 @@ const Room: React.FC<RoomProps> = ({
               padding: "0.75rem 1.25rem",
               borderRadius: "10px",
               cursor: "pointer",
-              background: "rgba(255,255,255,0.05)",
-              color: "white",
-              border: "1px solid rgba(255,255,255,0.1)",
-            }}
-          >
-            Back
-          </button>
-          <button
-            className="primary-btn"
-            onClick={() => window.location.reload()}
-            style={{
-              padding: "0.75rem 1.5rem",
-              borderRadius: "10px",
-              cursor: "pointer",
-              background: "linear-gradient(135deg, #6366f1 0%, #4338ca 100%)",
-              color: "white",
-              border: "none",
+              background: isSessionEnded
+                ? "rgba(239, 68, 68, 0.15)"
+                : "rgba(255,255,255,0.05)",
+              color: isSessionEnded ? "#fca5a5" : "white",
+              border: isSessionEnded
+                ? "1px solid rgba(239, 68, 68, 0.3)"
+                : "1px solid rgba(255,255,255,0.1)",
               fontWeight: 600,
             }}
           >
-            Refresh Now
+            {isSessionEnded ? "Return to Events" : "Back"}
           </button>
+          {!isSessionEnded && (
+            <button
+              className="primary-btn"
+              onClick={() => window.location.reload()}
+              style={{
+                padding: "0.75rem 1.5rem",
+                borderRadius: "10px",
+                cursor: "pointer",
+                background: "linear-gradient(135deg, #6366f1 0%, #4338ca 100%)",
+                color: "white",
+                border: "none",
+                fontWeight: 600,
+              }}
+            >
+              Refresh Now
+            </button>
+          )}
         </div>
       </div>
     );
@@ -599,8 +638,10 @@ const ActiveRoom: React.FC<{
   const connectionState = useConnectionState();
   const [showParticipants, setShowParticipants] = useState(false);
   const [messages, setMessages] = useState<
-    { id: string; sender: string; text: string; time: string; self: boolean }[]
+    { id: string; sender: string; text: string; time: string; self: boolean; role?: string }[]
   >([]);
+  const sentLocalIdsRef = useRef<Set<string>>(new Set());
+  const [isSessionEnded, setIsSessionEnded] = useState(false);
   const [inputMessage, setInputMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [participantCount, setParticipantCount] = useState(1);
@@ -895,7 +936,6 @@ const ActiveRoom: React.FC<{
   } | null>(null);
   const [graceCountdown, setGraceCountdown] = useState<number | null>(null);
   const [isTopupProcessing, setIsTopupProcessing] = useState(false);
-  const [streamEndedMessage, setStreamEndedMessage] = useState<string | null>(null);
 
   // ─── Socket.io Presence & Billing Monitoring ───────────────────────────────
   useEffect(() => {
@@ -942,31 +982,49 @@ const ActiveRoom: React.FC<{
     // Real-time Chat via Socket.io
     socket.on("message_received", (msgData: any) => {
       console.log("[Socket.io Chat] Message received:", msgData);
-      // Detect if message was sent by this client using multiple signals
-      const isSelf = Boolean(
-        // Primary: match by socket id (most reliable)
+      // Check if message was sent by THIS specific client connection
+      const isSentByMe = Boolean(
         (msgData.senderSocketId && msgData.senderSocketId === socket.id) ||
-        // Fallback: match by localId (optimistic message id we sent)
-        (msgData.localId && msgData.localId.startsWith("local_")) ||
-        // Fallback: match by userId
-        (msgData.senderId && storedUser?.id && msgData.senderId === storedUser.id && msgData.senderId !== "system")
+        (msgData.localId && sentLocalIdsRef.current.has(msgData.localId))
       );
 
       setMessages((prev) => {
-        // Skip if this is our own message (already added optimistically)
-        if (isSelf) return prev;
-        // Skip duplicate by server-generated id
+        if (isSentByMe) {
+          // If we added it optimistically, update its id from localId to server id
+          if (msgData.localId && prev.some((m) => m.id === msgData.localId)) {
+            return prev.map((m) =>
+              m.id === msgData.localId ? { ...m, id: String(msgData.id) } : m
+            );
+          }
+          if (prev.some((m) => m.id === String(msgData.id))) return prev;
+          return [
+            ...prev,
+            {
+              id: String(msgData.id),
+              sender: "You",
+              text: msgData.text,
+              time: msgData.timestamp
+                ? new Date(msgData.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              self: true,
+              role: isHost ? "host" : "attendee",
+            },
+          ];
+        }
+
+        // Message sent by someone else (e.g. host sent to attendees, or attendee sent to host)
         if (prev.some((m) => m.id === String(msgData.id))) return prev;
         return [
           ...prev,
           {
             id: String(msgData.id || Date.now()),
-            sender: msgData.user || "Participant",
+            sender: msgData.user || (msgData.role === "host" ? "Host" : "Participant"),
             text: msgData.text,
             time: msgData.timestamp
               ? new Date(msgData.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             self: false,
+            role: msgData.role,
           },
         ];
       });
@@ -1052,22 +1110,9 @@ const ActiveRoom: React.FC<{
 
     const handleStreamEnd = async (data: any) => {
       console.log("[Room] Received stream ending signal:", data);
-      // Show session-ended system message in the chat
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `system_end_${Date.now()}`,
-          sender: "System",
-          text: "🔴 This session has been ended by the host.",
-          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          self: false,
-        },
-      ]);
+      setIsSessionEnded(true);
+      setHostIsSharing(false);
       await cleanupTracksAndLeave();
-      const msg = data?.message || "This live session has been ended by the host.";
-      setStreamEndedMessage(msg);
-      // Auto-redirect after 5 seconds
-      setTimeout(() => onExit(), 5000);
     };
 
     socket.on("stream_ended", handleStreamEnd);
@@ -1293,17 +1338,6 @@ const ActiveRoom: React.FC<{
     )
       return;
 
-    // Broadcast a "session ended" system message to all attendees' chats
-    if (socketRef.current && sessionId) {
-      socketRef.current.emit("send_message", {
-        sessionId,
-        user: "System",
-        senderId: "system",
-        role: "system",
-        text: "🔴 This session has been ended by the host.",
-      });
-    }
-
     const authToken = localStorage.getItem("auth_token");
     try {
       if (eventId && config.isHost) {
@@ -1351,6 +1385,8 @@ const ActiveRoom: React.FC<{
 
     // Optimistically add to local state immediately so sender sees it right away
     const optimisticId = `local_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    sentLocalIdsRef.current.add(optimisticId);
+
     setMessages((prev) => [
       ...prev,
       {
@@ -1359,6 +1395,7 @@ const ActiveRoom: React.FC<{
         text,
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         self: true,
+        role: isHost ? "host" : "attendee",
       },
     ]);
 
@@ -1426,24 +1463,7 @@ const ActiveRoom: React.FC<{
         </div>
       )}
 
-      {/* ── Session Ended Overlay ── */}
-      {streamEndedMessage && (
-        <div className="stream-ended-overlay">
-          <div className="stream-ended-card">
-            <div className="stream-ended-icon">📺</div>
-            <h2>Session Ended</h2>
-            <p>{streamEndedMessage}</p>
-            <p className="stream-ended-redirect">Redirecting you in 5 seconds…</p>
-            <button
-              type="button"
-              className="stream-ended-btn"
-              onClick={onExit}
-            >
-              Leave Now
-            </button>
-          </div>
-        </div>
-      )}
+
       {/* ── In-Stream Low Balance Alert Banner for Host ── */}
       {lowBalanceAlert && !graceCountdown && (
         <div className="in-stream-warning-banner low-balance animate-fade-in">
@@ -1615,15 +1635,78 @@ const ActiveRoom: React.FC<{
                       }}
                     />
                   ) : (
-                    <div className="video-placeholder">
-                      <div className="host-avatar">HD</div>
-                      <span>Waiting for the host to start their camera...</span>
+                    <div className={`video-placeholder ${isSessionEnded ? "session-ended" : ""}`}>
+                      <div
+                        className="host-avatar"
+                        style={
+                          isSessionEnded
+                            ? {
+                                borderColor: "#ef4444",
+                                background: "rgba(239, 68, 68, 0.15)",
+                                color: "#ef4444",
+                                boxShadow: "0 0 24px rgba(239, 68, 68, 0.25)",
+                              }
+                            : undefined
+                        }
+                      >
+                        {isSessionEnded ? "🔴" : "HD"}
+                      </div>
+                      <span
+                        style={
+                          isSessionEnded
+                            ? {
+                                color: "#ef4444",
+                                fontWeight: 700,
+                                fontSize: "1.2rem",
+                                letterSpacing: "-0.01em",
+                              }
+                            : undefined
+                        }
+                      >
+                        {isSessionEnded
+                          ? "🔴 This session has been ended by the host"
+                          : "Waiting for the host to start their camera..."}
+                      </span>
+                      {isSessionEnded && (
+                        <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
+                          <p style={{ color: "#94a3b8", fontSize: "0.9rem", margin: 0 }}>
+                            The live broadcast has concluded. Thank you for attending!
+                          </p>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            onClick={onExit}
+                            style={{
+                              marginTop: "0.5rem",
+                              padding: "0.65rem 1.6rem",
+                              borderRadius: "10px",
+                              background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+                              border: "none",
+                              color: "#fff",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              boxShadow: "0 4px 14px rgba(239, 68, 68, 0.35)",
+                            }}
+                          >
+                            Return to Events
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
               )}
-              <div className="live-indicator">
-                {isScreenSharingActive ? "SCREEN SHARING" : isHost ? "LIVE" : "HOST FEED"}
+              <div
+                className={`live-indicator ${isSessionEnded ? "ended" : ""}`}
+                style={isSessionEnded ? { background: "rgba(239, 68, 68, 0.9)", color: "#fff" } : undefined}
+              >
+                {isSessionEnded
+                  ? "SESSION ENDED"
+                  : isScreenSharingActive
+                    ? "SCREEN SHARING"
+                    : isHost
+                      ? "LIVE"
+                      : "HOST FEED"}
               </div>
               <div className="tile-top-actions">
                 <button
@@ -2081,9 +2164,39 @@ const ActiveRoom: React.FC<{
                     key={msg.id}
                     className={`message-item ${msg.self ? "self" : ""} ${msg.sender === "System" ? "system" : ""}`}
                   >
-                    <span className="msg-user">{msg.sender}</span>
+                    <span className="msg-user">
+                      {msg.sender}
+                      {(msg.role === "host" || (!msg.self && msg.sender?.toLowerCase().includes("host"))) && (
+                        <span
+                          style={{
+                            marginLeft: "6px",
+                            fontSize: "0.65rem",
+                            padding: "1px 5px",
+                            borderRadius: "4px",
+                            background: "rgba(99, 102, 241, 0.2)",
+                            color: "#818cf8",
+                            border: "1px solid rgba(99, 102, 241, 0.4)",
+                            fontWeight: 700,
+                          }}
+                        >
+                          HOST
+                        </span>
+                      )}
+                    </span>
                     <p className="msg-text">{msg.text}</p>
-                    {msg.time && <span style={{ fontSize: "0.7rem", color: "#6b7280", display: "block", marginTop: "0.25rem", textAlign: msg.self ? "right" : "left" }}>{msg.time}</span>}
+                    {msg.time && (
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          color: "#6b7280",
+                          display: "block",
+                          marginTop: "0.25rem",
+                          textAlign: msg.self ? "right" : "left",
+                        }}
+                      >
+                        {msg.time}
+                      </span>
+                    )}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
@@ -2637,6 +2750,16 @@ const ActiveRoom: React.FC<{
           font-size: 2rem;
           font-weight: 700;
           color: white;
+          transition: all 0.3s ease;
+        }
+
+        .video-placeholder.session-ended {
+          animation: fadeIn 0.4s ease;
+        }
+
+        .live-indicator.ended {
+          background: #ef4444 !important;
+          box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
         }
 
         .live-indicator {
